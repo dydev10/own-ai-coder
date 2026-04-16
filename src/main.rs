@@ -38,7 +38,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "content": args.prompt
                 }
             ],
-            "model": "anthropic/claude-haiku-4.5",
+            //"model": "anthropic/claude-haiku-4.5",
+            "model": "nvidia/nemotron-3-super-120b-a12b:free",
         }))
         .await?;
 
