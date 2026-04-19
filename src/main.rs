@@ -2,6 +2,7 @@ use async_openai::{Client, config::OpenAIConfig};
 use clap::Parser;
 use serde_json::{Value, json};
 use std::{env, process};
+use dotenv::dotenv;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -12,6 +13,8 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv().ok();
+
     let args = Args::parse();
 
     let base_url = env::var("OPENROUTER_BASE_URL")
@@ -27,6 +30,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_api_key(api_key);
 
     let client = Client::with_config(config);
+    
+    // switch model so that tests pass on codecrafter
+    let is_local = env::var("LOCAL")
+        .map(|local| local == "true")
+        .unwrap_or(false);
+    let model = if is_local {
+        "nvidia/nemotron-3-super-120b-a12b:free"
+    } else {
+        "anthropic/claude-haiku-4.5"
+    };
 
     #[allow(unused_variables)]
     let response: Value = client
@@ -38,8 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     "content": args.prompt
                 }
             ],
-            //"model": "anthropic/claude-haiku-4.5",
-            "model": "nvidia/nemotron-3-super-120b-a12b:free",
+            "model": model,
         }))
         .await?;
 
