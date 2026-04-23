@@ -1,0 +1,3 @@
+@llmHost = {{$dotenv OPENROUTER_BASE_URL}}
+
+GET {{llmHost}} HTTP/1.1
