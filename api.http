@@ -1,3 +1,48 @@
 @llmHost = {{$dotenv OPENROUTER_BASE_URL}}
+@llmApiKey = {{$dotenv OPENROUTER_API_KEY}}
+@llmModel = nvidia/nemotron-3-super-120b-a12b:free
+@chatEndpoint = /chat/completions
 
+
+@prompt = Yo
+
+
+# Base api
 GET {{llmHost}} HTTP/1.1
+
+###
+
+
+# POST /chat/completions - Basic
+POST {{llmHost}}{{chatEndpoint}} HTTP/1.1
+Authorization: Bearer {{llmApiKey}}
+Content-Type: application/json
+
+{
+  "messages": [
+      {
+          "role": "user",
+          "content": "{{prompt}}"
+      }
+  ],
+  "model": "{{llmModel}}",
+  "tools": [
+      {
+          "type": "function",
+          "function": {
+              "name": "Read",
+              "description": "Read and return the contents of a file",
+              "parameters": {
+                  "type": "object",
+                  "properties": {
+                      "file_path": {
+                          "type": "string",
+                          "description": "The path to the file to read"
+                      }
+                  },
+                  "required": ["file_path"]
+              }
+          }
+      }
+  ]
+}
