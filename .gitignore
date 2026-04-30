@@ -11,3 +11,6 @@ target/
 
 # env files
 *.env
+
+# mac specific
+.DS_Store
