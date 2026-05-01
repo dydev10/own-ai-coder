@@ -4,7 +4,7 @@
 @chatEndpoint = /chat/completions
 
 
-@prompt = Yo
+@prompt = Write a poem about sky inspired by this poem: ./example.txt
 
 
 # Base api
@@ -41,6 +41,23 @@ Content-Type: application/json
                       }
                   },
                   "required": ["file_path"]
+              }
+          }
+      },
+      {
+          "type": "function",
+          "function": {
+              "name": "Poem",
+              "description": "Composes a poem for a given theme",
+              "parameters": {
+                  "type": "object",
+                  "properties": {
+                      "theme": {
+                          "type": "string",
+                          "description": "The requested theme of poem"
+                      }
+                  },
+                  "required": ["theme"]
               }
           }
       }
