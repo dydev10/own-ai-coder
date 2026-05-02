@@ -1,7 +1,7 @@
 use async_openai::{Client, config::OpenAIConfig};
 use clap::Parser;
 use serde_json::{Value, json};
-use std::{env, process};
+use std::{env, fs, process, str::FromStr};
 use dotenv::dotenv;
 
 #[derive(Parser)]
@@ -24,6 +24,26 @@ impl ChatFinishKind {
             "tool_calls" => Some(ChatFinishKind::ToolCall),
             _ => None,
         }
+    }
+}
+
+fn tool_call(name: &str, arguments: &str) {
+   match name {
+      "Read" => read_tool(arguments),
+      _ => println!("Unknown tool called") 
+   } 
+}
+
+fn read_tool(arguments: &str) {
+    match Value::from_str(arguments) {
+        Ok(args) => match args["file_path"].as_str() {
+            Some(file_path) => match fs::read_to_string(file_path) {
+                Ok(content) => println!("{}", content),
+                Err(_err) => println!("Cant read the file: {}", file_path),
+            },
+            None => (),
+        },
+        Err(_err) => println!("json parse error in args"),
     }
 }
 
@@ -109,7 +129,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             },
             ChatFinishKind::ToolCall => {
                 if let Some(tool_calls) = response["choices"][0]["message"]["tool_calls"][0]["function"]["name"].as_str() {
-                println!("Tool Call \"{}\"", tool_calls);
+                    // println!("Tool Call \"{}\"", tool_calls);
+                    if let Some(arguments) = response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"].as_str()  {
+                        tool_call(tool_calls, arguments);
+                    }
                 }
             },
         }
