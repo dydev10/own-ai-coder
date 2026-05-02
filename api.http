@@ -5,6 +5,7 @@
 
 
 @prompt = Write a poem about sky inspired by this poem: ./example.txt
+#@prompt = How many tools available?
 
 
 # Base api
