@@ -11,6 +11,22 @@ struct Args {
     prompt: String,
 }
 
+#[derive(Debug)]
+enum ChatFinishKind {
+    Stop,
+    ToolCall,
+}
+
+impl ChatFinishKind {
+    fn from_reason(reason: &str) -> Option<ChatFinishKind> {
+        match reason {
+            "stop" => Some(ChatFinishKind::Stop),
+            "tool_calls" => Some(ChatFinishKind::ToolCall),
+            _ => None,
+        }
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
@@ -77,8 +93,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     eprintln!("Logs from your program will appear here!");
 
-    if let Some(content) = response["choices"][0]["message"]["content"].as_str() {
-        println!("{}", content);
+    // Extract the response kind
+    let response_kind: Option<ChatFinishKind> = match response["choices"][0]["finish_reason"].as_str() {
+        Some(reason) => ChatFinishKind::from_reason(reason),
+        None => None,
+    };
+
+    // Check if normal response or tool call
+    match response_kind {
+        Some(kind) => match kind {
+            ChatFinishKind::Stop => {
+                if let Some(content) = response["choices"][0]["message"]["content"].as_str() {
+                println!("{}", content);
+                }
+            },
+            ChatFinishKind::ToolCall => {
+                if let Some(tool_calls) = response["choices"][0]["message"]["tool_calls"][0]["function"]["name"].as_str() {
+                println!("Tool Call \"{}\"", tool_calls);
+                }
+            },
+        }
+        None => println!("Unknown response type from LLM"),
     }
 
     Ok(())
