@@ -1,9 +1,9 @@
 use async_openai::{Client, config::OpenAIConfig};
 use clap::Parser;
-use serde::{Serialize, Deserialize};
+use dotenv::dotenv;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{env, fs, process, str::FromStr};
-use dotenv::dotenv;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -38,14 +38,13 @@ struct ToolCallArgs {
 struct ToolCall {
     id: String,
     r#type: String,
-    function: ToolCallArgs, 
-
+    function: ToolCallArgs,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 enum ChatMessageKind {
-    User ,
+    User,
     Assistant,
     Tool { tool_call_id: String },
     ToolCalls { tool_calls: Vec<ToolCall> },
@@ -61,38 +60,53 @@ struct ChatMessage {
 }
 
 fn tool_call(id: &str, name: &str, arguments: &str) -> Option<ChatMessage> {
-   match name {
-      "Read" => {
-        let content = read_tool(arguments);
-        match content {
-            Some(text) => Some(ChatMessage {
-                kind: ChatMessageKind::Tool { tool_call_id: String::from(id) },
-                role: String::from("tool"),
-                content: Some(text),
-            }),
-            None => None,
+    match name {
+        "Read" => {
+            let content = read_tool(arguments);
+            match content {
+                Some(text) => Some(ChatMessage {
+                    kind: ChatMessageKind::Tool {
+                        tool_call_id: String::from(id),
+                    },
+                    role: String::from("tool"),
+                    content: Some(text),
+                }),
+                None => None,
+            }
         }
-    },
-      _ => { println!("Unknown tool called"); None}
-   } 
+        _ => {
+            println!("Unknown tool called");
+            None
+        }
+    }
 }
 
 fn read_tool(arguments: &str) -> Option<String> {
     match Value::from_str(arguments) {
         Ok(args) => match args["file_path"].as_str() {
             Some(file_path) => match fs::read_to_string(file_path) {
-                Ok(content) => { Some(String::from(content))},
-                Err(_err) => { println!("Cant read the file: {}", file_path); None},
+                Ok(content) => Some(String::from(content)),
+                Err(_err) => {
+                    println!("Cant read the file: {}", file_path);
+                    None
+                }
             },
             None => None,
         },
-        Err(_err) => { println!("json parse error in args"); None},
+        Err(_err) => {
+            println!("json parse error in args");
+            None
+        }
     }
 }
 
-async fn agent_loop_step(client: &Client<OpenAIConfig>, model: &str, messages: &mut Vec<ChatMessage>)-> Result<Option<ChatFinishKind>, Box<dyn std::error::Error>> {
+async fn agent_loop_step(
+    client: &Client<OpenAIConfig>,
+    model: &String,
+    messages: &mut Vec<ChatMessage>,
+) -> Result<Option<ChatFinishKind>, Box<dyn std::error::Error>> {
     // println!("Model: {}", model);
-    
+
     let response: Value = client
         .chat()
         .create_byot(json!({
@@ -121,10 +135,11 @@ async fn agent_loop_step(client: &Client<OpenAIConfig>, model: &str, messages: &
         .await?;
 
     // Extract the response kind
-    let response_kind: Option<ChatFinishKind> = match response["choices"][0]["finish_reason"].as_str() {
-        Some(reason) => ChatFinishKind::from_reason(reason),
-        None => None,
-    };
+    let response_kind: Option<ChatFinishKind> =
+        match response["choices"][0]["finish_reason"].as_str() {
+            Some(reason) => ChatFinishKind::from_reason(reason),
+            None => None,
+        };
 
     // Check if normal response or tool call
     match &response_kind {
@@ -139,31 +154,38 @@ async fn agent_loop_step(client: &Client<OpenAIConfig>, model: &str, messages: &
                     };
                     messages.push(message);
                 }
-            },
+            }
             ChatFinishKind::ToolCall => {
                 let tool_call_data = response["choices"][0]["message"]["tool_calls"].as_array();
-                if let Some(tools) = tool_call_data  {
+                if let Some(tools) = tool_call_data {
                     for tool in tools {
-                        let tool_call_id = tool["id"].as_str()
-                            .expect("tool_call_id found in json");
-                        let tool_name = tool["function"]["name"].as_str()
+                        let tool_call_id = tool["id"].as_str().expect("tool_call_id found in json");
+                        let tool_name = tool["function"]["name"]
+                            .as_str()
                             .expect("tool_name not found in json");
-                        let tool_args = tool["function"]["arguments"].as_str()
+                        let tool_args = tool["function"]["arguments"]
+                            .as_str()
                             .expect("tool_args not found in json");
 
-                        let tool_call_0 = serde_json::from_value::<ToolCall>(response["choices"][0]["message"]["tool_calls"][0].clone())
-                            .expect("tool_args not found in json");
-                        messages.push(ChatMessage { kind: ChatMessageKind::ToolCalls { tool_calls: vec![tool_call_0] }, role: String::from("assistant"), content: None });
+                        let tool_call_0 = serde_json::from_value::<ToolCall>(
+                            response["choices"][0]["message"]["tool_calls"][0].clone(),
+                        )
+                        .expect("tool_args not found in json");
+                        messages.push(ChatMessage {
+                            kind: ChatMessageKind::ToolCalls {
+                                tool_calls: vec![tool_call_0],
+                            },
+                            role: String::from("assistant"),
+                            content: None,
+                        });
 
-
-                        if let Some(message) = tool_call(tool_call_id, tool_name, tool_args){
+                        if let Some(message) = tool_call(tool_call_id, tool_name, tool_args) {
                             messages.push(message);
                         }
                     }
-
                 }
-            },
-        }
+            }
+        },
         None => println!("Unknown response type from LLM"),
     };
 
@@ -176,8 +198,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let args = Args::parse();
 
-    let base_url = env::var("OPENROUTER_BASE_URL")
-        .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string());
+    let base_url = env::var("LOCAL_OLLAMA_URL").unwrap_or(
+        env::var("OPENROUTER_BASE_URL")
+            .unwrap_or_else(|_| "https://openrouter.ai/api/v1".to_string()),
+    );
+    eprintln!("Using Base URL: {}", &base_url);
 
     let api_key = env::var("OPENROUTER_API_KEY").unwrap_or_else(|_| {
         eprintln!("OPENROUTER_API_KEY is not set");
@@ -189,16 +214,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_api_key(api_key);
 
     let client = Client::with_config(config);
-    
+
     // switch model so that tests pass on codecrafter
     let is_local = env::var("LOCAL")
         .map(|local| local == "true")
         .unwrap_or(false);
     let model = if is_local {
-        "nvidia/nemotron-3-super-120b-a12b:free"
+        env::var("LOCAL_MODEL")
+            .unwrap_or_else(|_| String::from("nvidia/nemotron-3-super-120b-a12b:free"))
     } else {
-        "anthropic/claude-haiku-4.5"
+        String::from("anthropic/claude-haiku-4.5")
     };
+    eprintln!("Using Model: {}", &model);
 
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     eprintln!("Logs from your program will appear here!");
@@ -211,7 +238,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     loop {
-        match agent_loop_step(&client, model, &mut messages).await? {
+        match agent_loop_step(&client, &model, &mut messages).await? {
             Some(ChatFinishKind::Stop) => break,
             Some(ChatFinishKind::ToolCall) => (),
             None => {
