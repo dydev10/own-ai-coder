@@ -3,9 +3,14 @@
 @llmModel = nvidia/nemotron-3-super-120b-a12b:free
 @chatEndpoint = /chat/completions
 
-
-@prompt = Write a poem about sky inspired by this poem: ./example.txt
+# Simple response without Tool Call
 #@prompt = How many tools available?
+
+# Sequence Tool Call
+#@prompt = Write a poem about sky inspired by this poem: ./example.txt
+
+# Parallel Tool Call
+@prompt = Write a poem and add author at end from file author.md. Call both Tools in parallel
 
 
 # Base api
