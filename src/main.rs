@@ -141,23 +141,26 @@ async fn agent_loop_step(client: &Client<OpenAIConfig>, model: &str, messages: &
                 }
             },
             ChatFinishKind::ToolCall => {
-                let tool_call_data = response["choices"][0]["message"]["tool_calls"][0].as_object();
-                if let Some(tool) = tool_call_data  {
-                    let tool_call_id = tool["id"].as_str()
-                        .expect("tool_call_id found in json");
-                    let tool_name = tool["function"]["name"].as_str()
-                        .expect("tool_name not found in json");
-                    let tool_args = tool["function"]["arguments"].as_str()
-                        .expect("tool_args not found in json");
+                let tool_call_data = response["choices"][0]["message"]["tool_calls"].as_array();
+                if let Some(tools) = tool_call_data  {
+                    for tool in tools {
+                        let tool_call_id = tool["id"].as_str()
+                            .expect("tool_call_id found in json");
+                        let tool_name = tool["function"]["name"].as_str()
+                            .expect("tool_name not found in json");
+                        let tool_args = tool["function"]["arguments"].as_str()
+                            .expect("tool_args not found in json");
 
-                    let tool_call_0 = serde_json::from_value::<ToolCall>(response["choices"][0]["message"]["tool_calls"][0].clone())
-                        .expect("tool_args not found in json");
-                    messages.push(ChatMessage { kind: ChatMessageKind::ToolCalls { tool_calls: vec![tool_call_0] }, role: String::from("assistant"), content: None });
+                        let tool_call_0 = serde_json::from_value::<ToolCall>(response["choices"][0]["message"]["tool_calls"][0].clone())
+                            .expect("tool_args not found in json");
+                        messages.push(ChatMessage { kind: ChatMessageKind::ToolCalls { tool_calls: vec![tool_call_0] }, role: String::from("assistant"), content: None });
 
 
-                    if let Some(message) = tool_call(tool_call_id, tool_name, tool_args){
-                        messages.push(message);
+                        if let Some(message) = tool_call(tool_call_id, tool_name, tool_args){
+                            messages.push(message);
+                        }
                     }
+
                 }
             },
         }
@@ -209,10 +212,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     loop {
         match agent_loop_step(&client, model, &mut messages).await? {
-            Some(finish_kind) => match finish_kind {
-                ChatFinishKind::Stop => break,
-                ChatFinishKind::ToolCall => (),
-            },
+            Some(ChatFinishKind::Stop) => break,
+            Some(ChatFinishKind::ToolCall) => (),
             None => {
                 println!("Unexpected agent loop break");
                 break;
