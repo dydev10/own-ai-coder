@@ -81,7 +81,7 @@ fn read_tool(arguments: &str) -> Option<String> {
     match Value::from_str(arguments) {
         Ok(args) => match args["file_path"].as_str() {
             Some(file_path) => match fs::read_to_string(file_path) {
-                Ok(content) => { println!("{}", content); Some(String::from(content))},
+                Ok(content) => { Some(String::from(content))},
                 Err(_err) => { println!("Cant read the file: {}", file_path); None},
             },
             None => None,
@@ -91,7 +91,7 @@ fn read_tool(arguments: &str) -> Option<String> {
 }
 
 async fn agent_loop_step(client: &Client<OpenAIConfig>, model: &str, messages: &mut Vec<ChatMessage>)-> Result<Option<ChatFinishKind>, Box<dyn std::error::Error>> {
-    println!("Model: {}", model);
+    // println!("Model: {}", model);
     
     let response: Value = client
         .chat()
