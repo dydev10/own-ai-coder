@@ -1,5 +1,6 @@
 use async_openai::{Client, config::OpenAIConfig};
 use clap::Parser;
+use serde::{Serialize, Deserialize};
 use serde_json::{Value, json};
 use std::{env, fs, process, str::FromStr};
 use dotenv::dotenv;
@@ -27,24 +28,143 @@ impl ChatFinishKind {
     }
 }
 
-fn tool_call(name: &str, arguments: &str) {
+#[derive(Debug, Serialize, Deserialize)]
+struct ToolCallArgs {
+    name: String,
+    arguments: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ToolCall {
+    id: String,
+    r#type: String,
+    function: ToolCallArgs, 
+
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged)]
+enum ChatMessageKind {
+    User ,
+    Assistant,
+    Tool { tool_call_id: String },
+    ToolCalls { tool_calls: Vec<ToolCall> },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ChatMessage {
+    // #[serde(skip_serializing)]
+    #[serde(flatten)]
+    kind: ChatMessageKind,
+    role: String,
+    content: Option<String>,
+}
+
+fn tool_call(id: &str, name: &str, arguments: &str) -> Option<ChatMessage> {
    match name {
-      "Read" => read_tool(arguments),
-      _ => println!("Unknown tool called") 
+      "Read" => {
+        let content = read_tool(arguments);
+        match content {
+            Some(text) => Some(ChatMessage {
+                kind: ChatMessageKind::Tool { tool_call_id: String::from(id) },
+                role: String::from("tool"),
+                content: Some(text),
+            }),
+            None => None,
+        }
+    },
+      _ => { println!("Unknown tool called"); None}
    } 
 }
 
-fn read_tool(arguments: &str) {
+fn read_tool(arguments: &str) -> Option<String> {
     match Value::from_str(arguments) {
         Ok(args) => match args["file_path"].as_str() {
             Some(file_path) => match fs::read_to_string(file_path) {
-                Ok(content) => println!("{}", content),
-                Err(_err) => println!("Cant read the file: {}", file_path),
+                Ok(content) => { println!("{}", content); Some(String::from(content))},
+                Err(_err) => { println!("Cant read the file: {}", file_path); None},
             },
-            None => (),
+            None => None,
         },
-        Err(_err) => println!("json parse error in args"),
+        Err(_err) => { println!("json parse error in args"); None},
     }
+}
+
+async fn agent_loop_step(client: &Client<OpenAIConfig>, model: &str, messages: &mut Vec<ChatMessage>)-> Result<Option<ChatFinishKind>, Box<dyn std::error::Error>> {
+    println!("Model: {}", model);
+    
+    let response: Value = client
+        .chat()
+        .create_byot(json!({
+            "messages": messages,
+            "model": model,
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "Read",
+                        "description": "Read and return the contents of a file",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                "file_path": {
+                                    "type": "string",
+                                    "description": "The path to the file to read"
+                                }
+                            },
+                            "required": ["file_path"]
+                        }
+                    }
+                }
+            ],
+        }))
+        .await?;
+
+    // Extract the response kind
+    let response_kind: Option<ChatFinishKind> = match response["choices"][0]["finish_reason"].as_str() {
+        Some(reason) => ChatFinishKind::from_reason(reason),
+        None => None,
+    };
+
+    // Check if normal response or tool call
+    match &response_kind {
+        Some(kind) => match kind {
+            ChatFinishKind::Stop => {
+                if let Some(content) = response["choices"][0]["message"]["content"].as_str() {
+                    println!("{}", content);
+                    let message = ChatMessage {
+                        kind: ChatMessageKind::Assistant,
+                        role: String::from("assistant"),
+                        content: Some(String::from(content)),
+                    };
+                    messages.push(message);
+                }
+            },
+            ChatFinishKind::ToolCall => {
+                let tool_call_data = response["choices"][0]["message"]["tool_calls"][0].as_object();
+                if let Some(tool) = tool_call_data  {
+                    let tool_call_id = tool["id"].as_str()
+                        .expect("tool_call_id found in json");
+                    let tool_name = tool["function"]["name"].as_str()
+                        .expect("tool_name not found in json");
+                    let tool_args = tool["function"]["arguments"].as_str()
+                        .expect("tool_args not found in json");
+
+                    let tool_call_0 = serde_json::from_value::<ToolCall>(response["choices"][0]["message"]["tool_calls"][0].clone())
+                        .expect("tool_args not found in json");
+                    messages.push(ChatMessage { kind: ChatMessageKind::ToolCalls { tool_calls: vec![tool_call_0] }, role: String::from("assistant"), content: None });
+
+
+                    if let Some(message) = tool_call(tool_call_id, tool_name, tool_args){
+                        messages.push(message);
+                    }
+                }
+            },
+        }
+        None => println!("Unknown response type from LLM"),
+    };
+
+    Ok(response_kind)
 }
 
 #[tokio::main]
@@ -77,67 +197,30 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "anthropic/claude-haiku-4.5"
     };
 
-    #[allow(unused_variables)]
-    let response: Value = client
-        .chat()
-        .create_byot(json!({
-            "messages": [
-                {
-                    "role": "user",
-                    "content": args.prompt
-                }
-            ],
-            "model": model,
-            "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "Read",
-                        "description": "Read and return the contents of a file",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "file_path": {
-                                    "type": "string",
-                                    "description": "The path to the file to read"
-                                }
-                            },
-                            "required": ["file_path"]
-                        }
-                    }
-                }
-            ],
-        }))
-        .await?;
-
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     eprintln!("Logs from your program will appear here!");
 
-    // Extract the response kind
-    let response_kind: Option<ChatFinishKind> = match response["choices"][0]["finish_reason"].as_str() {
-        Some(reason) => ChatFinishKind::from_reason(reason),
-        None => None,
-    };
+    let mut messages: Vec<ChatMessage> = Vec::new();
+    messages.push(ChatMessage {
+        kind: ChatMessageKind::User,
+        role: String::from("user"),
+        content: Some(args.prompt),
+    });
 
-    // Check if normal response or tool call
-    match response_kind {
-        Some(kind) => match kind {
-            ChatFinishKind::Stop => {
-                if let Some(content) = response["choices"][0]["message"]["content"].as_str() {
-                println!("{}", content);
-                }
+    loop {
+        match agent_loop_step(&client, model, &mut messages).await? {
+            Some(finish_kind) => match finish_kind {
+                ChatFinishKind::Stop => break,
+                ChatFinishKind::ToolCall => (),
             },
-            ChatFinishKind::ToolCall => {
-                if let Some(tool_calls) = response["choices"][0]["message"]["tool_calls"][0]["function"]["name"].as_str() {
-                    // println!("Tool Call \"{}\"", tool_calls);
-                    if let Some(arguments) = response["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"].as_str()  {
-                        tool_call(tool_calls, arguments);
-                    }
-                }
-            },
+            None => {
+                println!("Unexpected agent loop break");
+                break;
+            }
         }
-        None => println!("Unknown response type from LLM"),
     }
+
+    // println!("{:?}", messages);
 
     Ok(())
 }
