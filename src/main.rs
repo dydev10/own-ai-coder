@@ -63,16 +63,25 @@ fn tool_call(id: &str, name: &str, arguments: &str) -> Option<ChatMessage> {
     match name {
         "Read" => {
             let content = read_tool(arguments);
-            match content {
-                Some(text) => Some(ChatMessage {
+            content.map(|text| {
+                Some(ChatMessage {
                     kind: ChatMessageKind::Tool {
                         tool_call_id: String::from(id),
                     },
                     role: String::from("tool"),
                     content: Some(text),
-                }),
-                None => None,
-            }
+                })
+            })?
+            // match content {
+            //    Some(text) => Some(ChatMessage {
+            //            kind: ChatMessageKind::Tool {
+            //            tool_call_id: String::from(id),
+            //        },
+            //        role: String::from("tool"),
+            //        content: Some(text),
+            //    }),
+            //    None => None,
+            //}
         }
         _ => {
             println!("Unknown tool called");
@@ -85,7 +94,7 @@ fn read_tool(arguments: &str) -> Option<String> {
     match Value::from_str(arguments) {
         Ok(args) => match args["file_path"].as_str() {
             Some(file_path) => match fs::read_to_string(file_path) {
-                Ok(content) => Some(String::from(content)),
+                Ok(content) => Some(content),
                 Err(_err) => {
                     println!("Cant read the file: {}", file_path);
                     None
