@@ -92,25 +92,13 @@ fn tool_call(id: &str, name: &str, arguments: &str) -> Option<ChatMessage> {
     match name {
         "Read" => {
             let content = read_tool(arguments);
-            content.map(|text| {
-                Some(ChatMessage {
-                    kind: ChatMessageKind::Tool {
-                        tool_call_id: String::from(id),
-                    },
-                    role: String::from("tool"),
-                    content: Some(text),
-                })
-            })?
-            // match content {
-            //    Some(text) => Some(ChatMessage {
-            //            kind: ChatMessageKind::Tool {
-            //            tool_call_id: String::from(id),
-            //        },
-            //        role: String::from("tool"),
-            //        content: Some(text),
-            //    }),
-            //    None => None,
-            //}
+            content.map(|text| ChatMessage {
+                kind: ChatMessageKind::Tool {
+                    tool_call_id: String::from(id),
+                },
+                role: String::from("tool"),
+                content: Some(text),
+            })
         }
         _ => {
             println!("Unknown tool called: {:?}", name);
