@@ -94,42 +94,28 @@ struct ChatMessage {
 }
 
 fn tool_call(id: &str, name: &str, arguments: &str) -> Option<ChatMessage> {
+    let mut content = None;
     match name {
         "Read" => {
-            let content = read_tool(arguments);
-            content.map(|text| ChatMessage {
-                kind: ChatMessageKind::Tool {
-                    tool_call_id: String::from(id),
-                },
-                role: String::from("tool"),
-                content: Some(text),
-            })
+            content = read_tool(arguments);
         }
         "Write" => {
-            let content = write_tool(arguments);
-            content.map(|text| ChatMessage {
-                kind: ChatMessageKind::Tool {
-                    tool_call_id: String::from(id),
-                },
-                role: String::from("tool"),
-                content: Some(text),
-            })
+            content = write_tool(arguments);
         }
         "Bash" => {
-            let content = bash_tool(arguments);
-            content.map(|text| ChatMessage {
-                kind: ChatMessageKind::Tool {
-                    tool_call_id: String::from(id),
-                },
-                role: String::from("tool"),
-                content: Some(text),
-            })
+            content = bash_tool(arguments);
         }
         _ => {
             println!("Unknown tool called: {:?}", name);
-            None
         }
     }
+    content.map(|text| ChatMessage {
+        kind: ChatMessageKind::Tool {
+            tool_call_id: String::from(id),
+        },
+        role: String::from("tool"),
+        content: Some(text),
+    })
 }
 
 fn read_tool(arguments: &str) -> Option<String> {
