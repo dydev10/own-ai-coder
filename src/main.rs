@@ -295,10 +295,11 @@ async fn agent_loop_step(
                             .expect("tool_args not found in json");
 
                         // print reasoning for every tool call
-                        let reasoning = response["choices"][0]["message"]["reasoning"]
-                            .as_str()
-                            .expect("no reasing found in json response");
-                        print_tool_reasoning(tool_name, reasoning);
+                        if let Some(reasoning) =
+                            response["choices"][0]["message"]["reasoning"].as_str()
+                        {
+                            print_tool_reasoning(tool_name, reasoning);
+                        }
 
                         let tool_call_i = serde_json::from_value::<ToolCall>(
                             response["choices"][0]["message"]["tool_calls"][i].clone(),
