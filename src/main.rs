@@ -3,7 +3,7 @@ use clap::Parser;
 use dotenv::dotenv;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{env, fs, process, str::FromStr};
+use std::{collections::HashMap, env, fs, process, str::FromStr};
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -26,6 +26,35 @@ impl ChatFinishKind {
             _ => None,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ToolDefProperty {
+    #[serde(rename = "type")]
+    kind: String,
+    description: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ToolDefParameters {
+    #[serde(rename = "type")]
+    kind: String,
+    required: Vec<String>,
+    properties: HashMap<String, ToolDefProperty>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ToolDefFunction {
+    name: String,
+    description: String,
+    parameters: ToolDefParameters,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ToolDef {
+    #[serde(rename = "type")]
+    kind: String,
+    function: ToolDefFunction,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -63,19 +92,16 @@ fn tool_call(id: &str, name: &str, arguments: &str) -> Option<ChatMessage> {
     match name {
         "Read" => {
             let content = read_tool(arguments);
-            match content {
-                Some(text) => Some(ChatMessage {
-                    kind: ChatMessageKind::Tool {
-                        tool_call_id: String::from(id),
-                    },
-                    role: String::from("tool"),
-                    content: Some(text),
-                }),
-                None => None,
-            }
+            content.map(|text| ChatMessage {
+                kind: ChatMessageKind::Tool {
+                    tool_call_id: String::from(id),
+                },
+                role: String::from("tool"),
+                content: Some(text),
+            })
         }
         _ => {
-            println!("Unknown tool called");
+            println!("Unknown tool called: {:?}", name);
             None
         }
     }
@@ -85,7 +111,7 @@ fn read_tool(arguments: &str) -> Option<String> {
     match Value::from_str(arguments) {
         Ok(args) => match args["file_path"].as_str() {
             Some(file_path) => match fs::read_to_string(file_path) {
-                Ok(content) => Some(String::from(content)),
+                Ok(content) => Some(content),
                 Err(_err) => {
                     println!("Cant read the file: {}", file_path);
                     None
@@ -107,29 +133,61 @@ async fn agent_loop_step(
 ) -> Result<Option<ChatFinishKind>, Box<dyn std::error::Error>> {
     // println!("Model: {}", model);
 
+    let read_tool_def = ToolDef {
+        kind: String::from("function"),
+        function: ToolDefFunction {
+            name: String::from("Read"),
+            description: String::from("Read and return the contents of a file"),
+            parameters: ToolDefParameters {
+                kind: String::from("object"),
+                required: vec![String::from("file_path")],
+                properties: HashMap::from([(
+                    String::from("file_path"),
+                    ToolDefProperty {
+                        kind: String::from("string"),
+                        description: String::from("The path to the file to read"),
+                    },
+                )]),
+            },
+        },
+    };
+
+    let write_tool_def = ToolDef {
+        kind: String::from("function"),
+        function: ToolDefFunction {
+            name: String::from("Write"),
+            description: String::from("Write content to a file"),
+            parameters: ToolDefParameters {
+                kind: String::from("object"),
+                required: vec![String::from("file_path"), String::from("content")],
+                properties: HashMap::from([
+                    (
+                        String::from("file_path"),
+                        ToolDefProperty {
+                            kind: String::from("string"),
+                            description: String::from("The path of the file to write to"),
+                        },
+                    ),
+                    (
+                        String::from("content"),
+                        ToolDefProperty {
+                            kind: String::from("string"),
+                            description: String::from("The content to write to the file"),
+                        },
+                    ),
+                ]),
+            },
+        },
+    };
+
     let response: Value = client
         .chat()
         .create_byot(json!({
             "messages": messages,
             "model": model,
             "tools": [
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "Read",
-                        "description": "Read and return the contents of a file",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {
-                                "file_path": {
-                                    "type": "string",
-                                    "description": "The path to the file to read"
-                                }
-                            },
-                            "required": ["file_path"]
-                        }
-                    }
-                }
+                read_tool_def,
+                write_tool_def,
             ],
         }))
         .await?;
@@ -158,7 +216,7 @@ async fn agent_loop_step(
             ChatFinishKind::ToolCall => {
                 let tool_call_data = response["choices"][0]["message"]["tool_calls"].as_array();
                 if let Some(tools) = tool_call_data {
-                    for tool in tools {
+                    for (i, tool) in tools.iter().enumerate() {
                         let tool_call_id = tool["id"].as_str().expect("tool_call_id found in json");
                         let tool_name = tool["function"]["name"]
                             .as_str()
@@ -167,13 +225,13 @@ async fn agent_loop_step(
                             .as_str()
                             .expect("tool_args not found in json");
 
-                        let tool_call_0 = serde_json::from_value::<ToolCall>(
-                            response["choices"][0]["message"]["tool_calls"][0].clone(),
+                        let tool_call_i = serde_json::from_value::<ToolCall>(
+                            response["choices"][0]["message"]["tool_calls"][i].clone(),
                         )
-                        .expect("tool_args not found in json");
+                        .expect("tool_call_i not found in json");
                         messages.push(ChatMessage {
                             kind: ChatMessageKind::ToolCalls {
-                                tool_calls: vec![tool_call_0],
+                                tool_calls: vec![tool_call_i],
                             },
                             role: String::from("assistant"),
                             content: None,
