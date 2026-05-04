@@ -93,6 +93,16 @@ struct ChatMessage {
     content: Option<String>,
 }
 
+fn print_tool_reasoning(tool_name: &str, reasoning: &str) {
+    eprintln!("/********\\");
+    eprintln!("Reasoning to call tool: {:?}", tool_name);
+    eprintln!("------",);
+    eprintln!("{:?}", reasoning);
+    eprintln!("---");
+    eprintln!("\\********/");
+    eprintln!("\n");
+}
+
 fn tool_call(id: &str, name: &str, arguments: &str) -> Option<ChatMessage> {
     let mut content = None;
     match name {
@@ -283,6 +293,12 @@ async fn agent_loop_step(
                         let tool_args = tool["function"]["arguments"]
                             .as_str()
                             .expect("tool_args not found in json");
+
+                        // print reasoning for every tool call
+                        let reasoning = response["choices"][0]["message"]["reasoning"]
+                            .as_str()
+                            .expect("no reasing found in json response");
+                        print_tool_reasoning(tool_name, reasoning);
 
                         let tool_call_i = serde_json::from_value::<ToolCall>(
                             response["choices"][0]["message"]["tool_calls"][i].clone(),
