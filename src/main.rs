@@ -113,7 +113,7 @@ fn tool_call(id: &str, name: &str, arguments: &str) -> Option<ChatMessage> {
             //}
         }
         _ => {
-            println!("Unknown tool called");
+            println!("Unknown tool called: {:?}", name);
             None
         }
     }
@@ -228,7 +228,7 @@ async fn agent_loop_step(
             ChatFinishKind::ToolCall => {
                 let tool_call_data = response["choices"][0]["message"]["tool_calls"].as_array();
                 if let Some(tools) = tool_call_data {
-                    for tool in tools {
+                    for (i, tool) in tools.iter().enumerate() {
                         let tool_call_id = tool["id"].as_str().expect("tool_call_id found in json");
                         let tool_name = tool["function"]["name"]
                             .as_str()
@@ -237,13 +237,13 @@ async fn agent_loop_step(
                             .as_str()
                             .expect("tool_args not found in json");
 
-                        let tool_call_0 = serde_json::from_value::<ToolCall>(
-                            response["choices"][0]["message"]["tool_calls"][0].clone(),
+                        let tool_call_i = serde_json::from_value::<ToolCall>(
+                            response["choices"][0]["message"]["tool_calls"][i].clone(),
                         )
-                        .expect("tool_args not found in json");
+                        .expect("tool_call_i not found in json");
                         messages.push(ChatMessage {
                             kind: ChatMessageKind::ToolCalls {
-                                tool_calls: vec![tool_call_0],
+                                tool_calls: vec![tool_call_i],
                             },
                             role: String::from("assistant"),
                             content: None,
