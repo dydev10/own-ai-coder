@@ -3,7 +3,12 @@ use clap::Parser;
 use dotenv::dotenv;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::HashMap, env, fs, process, str::FromStr};
+use std::{
+    collections::HashMap,
+    env, fs,
+    process::{self, Command},
+    str::FromStr,
+};
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -110,6 +115,16 @@ fn tool_call(id: &str, name: &str, arguments: &str) -> Option<ChatMessage> {
                 content: Some(text),
             })
         }
+        "Bash" => {
+            let content = bash_tool(arguments);
+            content.map(|text| ChatMessage {
+                kind: ChatMessageKind::Tool {
+                    tool_call_id: String::from(id),
+                },
+                role: String::from("tool"),
+                content: Some(text),
+            })
+        }
         _ => {
             println!("Unknown tool called: {:?}", name);
             None
@@ -144,6 +159,24 @@ fn write_tool(arguments: &str) -> Option<String> {
     fs::write(file_path, content).ok()?;
     eprintln!("Write Successful to the file: {}", file_path);
     Some(String::from("Done."))
+}
+
+fn bash_tool(arguments: &str) -> Option<String> {
+    let args = Value::from_str(arguments).ok()?;
+    let command = args["command"].as_str()?;
+
+    let res = Command::new("sh").arg("-c").arg(command).output().unwrap();
+
+    let stdout = String::from_utf8_lossy(&res.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&res.stderr).to_string();
+
+    if res.status.success() {
+        eprintln!("Command Executed on sh {:?}", command);
+        Some(stdout)
+    } else {
+        eprintln!("Failed to Execute on sh {:?}", command);
+        Some(stderr)
+    }
 }
 
 async fn agent_loop_step(
@@ -200,6 +233,25 @@ async fn agent_loop_step(
         },
     };
 
+    let bash_tool_def = ToolDef {
+        kind: String::from("function"),
+        function: ToolDefFunction {
+            name: String::from("Bash"),
+            description: String::from("Execute a shell command"),
+            parameters: ToolDefParameters {
+                kind: String::from("object"),
+                required: vec![String::from("command")],
+                properties: HashMap::from([(
+                    String::from("command"),
+                    ToolDefProperty {
+                        kind: String::from("string"),
+                        description: String::from("The command to execute"),
+                    },
+                )]),
+            },
+        },
+    };
+
     let response: Value = client
         .chat()
         .create_byot(json!({
@@ -208,6 +260,7 @@ async fn agent_loop_step(
             "tools": [
                 read_tool_def,
                 write_tool_def,
+                bash_tool_def,
             ],
         }))
         .await?;
