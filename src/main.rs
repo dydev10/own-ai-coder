@@ -100,6 +100,16 @@ fn tool_call(id: &str, name: &str, arguments: &str) -> Option<ChatMessage> {
                 content: Some(text),
             })
         }
+        "Write" => {
+            let content = write_tool(arguments);
+            content.map(|text| ChatMessage {
+                kind: ChatMessageKind::Tool {
+                    tool_call_id: String::from(id),
+                },
+                role: String::from("tool"),
+                content: Some(text),
+            })
+        }
         _ => {
             println!("Unknown tool called: {:?}", name);
             None
@@ -124,6 +134,16 @@ fn read_tool(arguments: &str) -> Option<String> {
             None
         }
     }
+}
+
+fn write_tool(arguments: &str) -> Option<String> {
+    let args = Value::from_str(arguments).ok()?;
+    let file_path = args["file_path"].as_str()?;
+    let content = args["content"].as_str()?;
+
+    fs::write(file_path, content).ok()?;
+    eprintln!("Write Successful to the file: {}", file_path);
+    Some(String::from("Done."))
 }
 
 async fn agent_loop_step(
