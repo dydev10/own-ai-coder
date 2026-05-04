@@ -95,9 +95,9 @@ struct ChatMessage {
 
 fn print_tool_reasoning(tool_name: &str, reasoning: &str) {
     eprintln!("/********\\");
-    eprintln!("Reasoning to call tool: {:?}", tool_name);
+    eprintln!("Reasoning to call tool: {tool_name}");
     eprintln!("------",);
-    eprintln!("{:?}", reasoning);
+    eprintln!("{reasoning}");
     eprintln!("---");
     eprintln!("\\********/");
     eprintln!("\n");
