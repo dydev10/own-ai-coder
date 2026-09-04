@@ -366,7 +366,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     if let Some(arg_prompt) = args.prompt {
         // Prompt mode: read the prompt args and runs the agent loop once, then exits the program
-        println!("Gonna run prompt mode");
+        eprintln!("Gonna run prompt mode");
         let mut messages: Vec<ChatMessage> = Vec::new();
         messages.push(ChatMessage {
             kind: ChatMessageKind::User,
@@ -386,7 +386,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     } else {
         // Chat mode: Launches the full chat TUI
-        println!("Gonna run Chat mode TUI");
+        eprintln!("Gonna run Chat mode TUI");
     }
 
     // println!("{:?}", messages);
