@@ -14,7 +14,7 @@ use std::{
 #[command(author, version, about)]
 struct Args {
     #[arg(short = 'p', long)]
-    prompt: String,
+    prompt: Option<String>,
 }
 
 #[derive(Debug)]
@@ -364,22 +364,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     eprintln!("Logs from your program will appear here!");
 
-    let mut messages: Vec<ChatMessage> = Vec::new();
-    messages.push(ChatMessage {
-        kind: ChatMessageKind::User,
-        role: String::from("user"),
-        content: Some(args.prompt),
-    });
+    if let Some(arg_prompt) = args.prompt {
+        // Prompt mode: read the prompt args and runs the agent loop once, then exits the program
+        println!("Gonna run prompt mode");
+        let mut messages: Vec<ChatMessage> = Vec::new();
+        messages.push(ChatMessage {
+            kind: ChatMessageKind::User,
+            role: String::from("user"),
+            content: Some(arg_prompt),
+        });
 
-    loop {
-        match agent_loop_step(&client, &model, &mut messages).await? {
-            Some(ChatFinishKind::Stop) => break,
-            Some(ChatFinishKind::ToolCall) => (),
-            None => {
-                println!("Unexpected agent loop break");
-                break;
+        loop {
+            match agent_loop_step(&client, &model, &mut messages).await? {
+                Some(ChatFinishKind::Stop) => break,
+                Some(ChatFinishKind::ToolCall) => (),
+                None => {
+                    println!("Unexpected agent loop break");
+                    break;
+                }
             }
         }
+    } else {
+        // Chat mode: Launches the full chat TUI
+        println!("Gonna run Chat mode TUI");
     }
 
     // println!("{:?}", messages);
