@@ -15,6 +15,6 @@ clap = { version = "4.3.14", features = ["derive"] } # CLI argument parsing
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149" # JSON serialization/deserialization
 dotenv = "0.15.0"
-ratatui = "0.30.2"
+ratatui = { version = "0.30.2", features = ["unstable-rendered-line-info"] }
 crossterm = "0.29.0"
 ratatui-textarea = "0.9.2"
