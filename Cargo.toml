@@ -17,3 +17,4 @@ serde_json = "1.0.149" # JSON serialization/deserialization
 dotenv = "0.15.0"
 ratatui = "0.30.2"
 crossterm = "0.29.0"
+ratatui-textarea = "0.9.2"

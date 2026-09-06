@@ -1,3 +1,6 @@
+mod app;
+mod ui;
+
 use async_openai::{Client, config::OpenAIConfig};
 use clap::Parser;
 use dotenv::dotenv;
@@ -9,6 +12,8 @@ use std::{
     process::{self, Command},
     str::FromStr,
 };
+
+use crate::app::App;
 
 #[derive(Parser)]
 #[command(author, version, about)]
@@ -387,6 +392,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         // Chat mode: Launches the full chat TUI
         eprintln!("Gonna run Chat mode TUI");
+        ratatui::run(|terminal| App::new().run(terminal))?;
     }
 
     // println!("{:?}", messages);
