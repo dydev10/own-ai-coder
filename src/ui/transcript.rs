@@ -6,17 +6,13 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph, Wrap},
 };
 
-use crate::app::Item;
+use crate::app::{Item, ScrollState};
 
-pub fn draw(frame: &mut Frame, area: Rect, items: &[Item]) {
-    let block = Block::bordered()
-        .border_style(Style::new().red())
-        .padding(Padding::uniform(1));
+const H_PADDING: u16 = 1;
 
-    //    // to be used for wrapping and height
-    //    let inner = block.inner(rect);
-
+fn build_lines(items: &[Item]) -> Vec<Line<'static>> {
     let mut lines: Vec<Line> = Vec::new();
+
     for item in items {
         match item {
             Item::User(text) => {
@@ -29,10 +25,37 @@ pub fn draw(frame: &mut Frame, area: Rect, items: &[Item]) {
         lines.push(Line::raw(""));
     }
 
-    frame.render_widget(
-        Paragraph::new(lines)
-            .wrap(Wrap { trim: false })
-            .block(block),
-        area,
-    );
+    lines
+}
+
+fn block() -> Block<'static> {
+    Block::bordered()
+        .border_style(Style::new().red())
+        .padding(Padding::horizontal(H_PADDING))
+}
+
+pub fn draw(frame: &mut Frame, area: Rect, items: &[Item], scroll: &ScrollState) {
+    let block = block();
+
+    let para = Paragraph::new(build_lines(items))
+        .wrap(Wrap { trim: false })
+        .scroll((scroll.offset, 0))
+        .block(block);
+
+    frame.render_widget(para, area);
+}
+
+pub fn total_height(items: &[Item], content_width: u16) -> u16 {
+    Paragraph::new(build_lines(items))
+        .wrap(Wrap { trim: false })
+        .line_count(content_width) as u16
+}
+
+pub fn max_offset(items: &[Item], area: Rect) -> u16 {
+    let inner = block().inner(area);
+    total_height(items, inner.width).saturating_sub(inner.height)
+}
+
+pub fn page_height(area: Rect) -> u16 {
+    block().inner(area).height.saturating_sub(H_PADDING).max(1)
 }

@@ -25,12 +25,30 @@ pub enum Action {
     Cancel,
     Submit,
     Input(KeyEvent),
+    ScrollUp,
+    ScrollDown,
+    PageUp,
+    PageDown,
+}
+
+pub struct ScrollState {
+    pub offset: u16,
+    pub pinned: bool,
+}
+
+impl Default for ScrollState {
+    fn default() -> Self {
+        Self {
+            offset: 0,
+            pinned: true,
+        }
+    }
 }
 
 pub struct App {
     pub transcript: Vec<Item>,
     pub input: TextArea<'static>,
-    //pub scroll: ScrollState,
+    pub scroll: ScrollState,
     pub status: Status,
     //pub pending: Option<PermissionRequest>,
     //pub keymap: KeyMap,
@@ -43,6 +61,7 @@ impl App {
             //transcript: vec![],
             transcript: createMockItems(),
             input: TextArea::default(),
+            scroll: ScrollState::default(),
             status: Status::Idle,
             should_quit: false,
         }
@@ -68,12 +87,31 @@ impl App {
                     self.transcript.push(Item::User(text));
                     self.input = TextArea::default();
                 }
+                // also pin scroll to bottom to show latest streamed content on Submit
+                self.scroll.pinned = true;
+                self.scroll_follow();
             }
             Action::Cancel => {
                 eprintln!("Cancel will be triggered here");
             }
             Action::Input(key) => {
                 self.input.input(key);
+            }
+            Action::ScrollUp => {
+                let amount = self.page_height() / 2;
+                self.scroll_up(amount);
+            }
+            Action::ScrollDown => {
+                let amount = self.page_height() / 2;
+                self.scroll_down(amount);
+            }
+            Action::PageUp => {
+                let amount = self.page_height();
+                self.scroll_up(amount);
+            }
+            Action::PageDown => {
+                let amount = self.page_height();
+                self.scroll_down(amount);
             }
         }
     }
@@ -90,8 +128,40 @@ impl App {
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(Action::Quit),
             (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Submit),
+            // scroll
+            (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::ScrollUp),
+            (KeyModifiers::CONTROL, KeyCode::Char('d')) => Some(Action::ScrollDown),
+            (KeyModifiers::NONE, KeyCode::PageUp) => Some(Action::PageUp),
+            (KeyModifiers::NONE, KeyCode::PageDown) => Some(Action::PageDown),
+            // text input fallthrough
             _ => Some(Action::Input(key)),
         }
+    }
+
+    // scroll handling
+    fn max_scroll_offset(&self) -> u16 {
+        ui::transcript::max_offset(&self.transcript, ui::main_area(self))
+    }
+
+    fn page_height(&self) -> u16 {
+        ui::transcript::page_height(ui::main_area(self))
+    }
+
+    fn scroll_follow(&mut self) {
+        if self.scroll.pinned {
+            self.scroll.offset = self.max_scroll_offset();
+        }
+    }
+
+    fn scroll_up(&mut self, amount: u16) {
+        self.scroll.pinned = false;
+        self.scroll.offset = self.scroll.offset.saturating_sub(amount);
+    }
+
+    fn scroll_down(&mut self, amount: u16) {
+        let max_scroll = self.max_scroll_offset();
+        self.scroll.offset = self.scroll.offset.saturating_add(amount).min(max_scroll);
+        self.scroll.pinned = self.scroll.offset == max_scroll;
     }
 }
 

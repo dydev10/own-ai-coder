@@ -10,3 +10,7 @@ pub fn draw(frame: &mut Frame, area: Rect, input: &TextArea) {
     frame.render_widget(&b, area);
     frame.render_widget(input, b.inner(area));
 }
+
+pub fn height(input: &TextArea) -> u16 {
+    (input.lines().len() as u16 + 2).clamp(3, 8)
+}
