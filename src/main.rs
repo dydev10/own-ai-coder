@@ -331,9 +331,29 @@ async fn agent_loop_step(
     Ok(response_kind)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn run_agent_loop(
+    client: Client<OpenAIConfig>,
+    model: String,
+    mut messages: Vec<ChatMessage>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    loop {
+        match agent_loop_step(&client, &model, &mut messages).await? {
+            Some(ChatFinishKind::Stop) => break,
+            Some(ChatFinishKind::ToolCall) => (),
+            None => {
+                println!("Unexpected agent loop break");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     dotenv().ok();
+
+    let rt = tokio::runtime::Runtime::new().unwrap();
+    let _guard = rt.enter();
 
     let args = Args::parse();
 
@@ -372,23 +392,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Some(arg_prompt) = args.prompt {
         // Prompt mode: read the prompt args and runs the agent loop once, then exits the program
         eprintln!("Gonna run prompt mode");
-        let mut messages: Vec<ChatMessage> = Vec::new();
-        messages.push(ChatMessage {
+        let messages: Vec<ChatMessage> = vec![ChatMessage {
             kind: ChatMessageKind::User,
             role: String::from("user"),
             content: Some(arg_prompt),
-        });
-
-        loop {
-            match agent_loop_step(&client, &model, &mut messages).await? {
-                Some(ChatFinishKind::Stop) => break,
-                Some(ChatFinishKind::ToolCall) => (),
-                None => {
-                    println!("Unexpected agent loop break");
-                    break;
-                }
-            }
-        }
+        }];
+        rt.block_on(run_agent_loop(client, model, messages))?;
     } else {
         // Chat mode: Launches the full chat TUI
         eprintln!("Gonna run Chat mode TUI");
