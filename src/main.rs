@@ -401,7 +401,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         // Chat mode: Launches the full chat TUI
         eprintln!("Gonna run Chat mode TUI");
-        ratatui::run(|terminal| App::new().run(terminal))?;
+        ratatui::run(|terminal| rt.block_on(App::new().run(terminal)))?;
     }
 
     // println!("{:?}", messages);

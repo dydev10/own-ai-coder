@@ -3,6 +3,7 @@ use std::io::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 use ratatui_textarea::TextArea;
+use tokio_stream::StreamExt;
 
 use crate::ui;
 
@@ -67,12 +68,15 @@ impl App {
         }
     }
 
-    pub fn run(mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+    pub async fn run(mut self, terminal: &mut DefaultTerminal) -> Result<()> {
+        let mut tui_events = crossterm::event::EventStream::new();
         while !self.should_quit {
             terminal.draw(|frame| ui::draw(frame, &self))?;
 
-            if let Some(action) = self.handle_event(event::read()?) {
-                self.update(action);
+            if let Some(Ok(event)) = tui_events.next().await {
+                if let Some(action) = self.handle_event(event) {
+                    self.update(action);
+                }
             }
         }
         Ok(())
