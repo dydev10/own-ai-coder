@@ -16,5 +16,8 @@ pub fn draw(frame: &mut Frame, area: Rect, status: &Status) {
         Status::Idle => {
             frame.render_widget(Line::raw("Idle").right_aligned(), area);
         }
+        Status::Streaming => {
+            frame.render_widget(Line::raw("Streaming").right_aligned(), area);
+        }
     }
 }

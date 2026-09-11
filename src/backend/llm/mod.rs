@@ -1,9 +1,58 @@
 use async_openai::{Client, config::OpenAIConfig};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use std::{collections::HashMap, fs, process::Command, str::FromStr};
+use serde_json::Value;
+use std::{collections::HashMap, fs, process::Command, str::FromStr, sync::Arc};
+use tokio::sync::{Mutex, mpsc};
+
+use crate::session::{SessionId, SessionUpdate, StopReason};
 
 #[derive(Debug)]
+pub struct LlmBackend {
+    client: Client<OpenAIConfig>,
+    config: ProviderConfig,
+    history: Arc<Mutex<Vec<ChatMessage>>>,
+    tx: mpsc::Sender<SessionUpdate>,
+}
+
+impl LlmBackend {
+    pub fn new(config: ProviderConfig, tx: mpsc::Sender<SessionUpdate>) -> Self {
+        let client_config = OpenAIConfig::new()
+            .with_api_base(&config.base_url)
+            .with_api_key(config.api_key.as_deref().unwrap_or("unused"));
+        let client = Client::with_config(client_config);
+        Self {
+            client,
+            config,
+            history: Arc::new(Mutex::new(Vec::new())),
+            tx,
+        }
+    }
+    pub fn prompt(&mut self, session: SessionId, text: String) {
+        let history = self.history.clone();
+        let (client, config, tx) = (self.client.clone(), self.config.clone(), self.tx.clone());
+
+        tokio::spawn(async move {
+            let mut history_guard = history.lock().await;
+            history_guard.push(ChatMessage {
+                kind: ChatMessageKind::User,
+                role: String::from("user"),
+                content: Some(text),
+            });
+
+            if let Err(e) = run_agent_loop(&client, &config, &mut history_guard, session, &tx).await
+            {
+                let _ = tx
+                    .send(SessionUpdate::Failed {
+                        session,
+                        error: e.to_string(),
+                    })
+                    .await;
+            }
+        });
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ProviderConfig {
     pub base_url: String,
     pub api_key: Option<String>,
@@ -263,7 +312,9 @@ async fn agent_loop_step(
     tools: &Vec<ToolDef>,
     model: &String,
     messages: &mut Vec<ChatMessage>,
-) -> Result<Option<ChatFinishKind>, Box<dyn std::error::Error>> {
+    session: SessionId,
+    tx: &mpsc::Sender<SessionUpdate>,
+) -> Result<Option<ChatFinishKind>, Box<dyn std::error::Error + Send + Sync>> {
     // println!("Model: {}", model);
 
     let response: Value = client
@@ -288,13 +339,22 @@ async fn agent_loop_step(
         Some(kind) => match kind {
             ChatFinishKind::Stop => {
                 if let Some(content) = response["choices"][0]["message"]["content"].as_str() {
-                    println!("{}", content);
+                    //println!("{}", content);
+
+                    // Update backend history
                     let message = ChatMessage {
                         kind: ChatMessageKind::Assistant,
                         role: String::from("assistant"),
                         content: Some(String::from(content)),
                     };
                     messages.push(message);
+
+                    // Send event for App UI Update
+                    tx.send(SessionUpdate::AgentMessageChunk {
+                        session,
+                        text: String::from(content),
+                    })
+                    .await?;
                 }
             }
             ChatFinishKind::ToolCall => {
@@ -342,16 +402,25 @@ async fn agent_loop_step(
 }
 
 pub async fn run_agent_loop(
-    client: Client<OpenAIConfig>,
-    model: String,
-    mut messages: Vec<ChatMessage>,
-) -> Result<(), Box<dyn std::error::Error>> {
+    client: &Client<OpenAIConfig>,
+    config: &ProviderConfig,
+    history: &mut Vec<ChatMessage>,
+    session: SessionId,
+    tx: &mpsc::Sender<SessionUpdate>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // todo: move this outside of run_agent_loop
     let tools = build_tool_defs();
 
     loop {
-        match agent_loop_step(&client, &tools, &model, &mut messages).await? {
-            Some(ChatFinishKind::Stop) => break,
+        match agent_loop_step(&client, &tools, &config.model, history, session, tx).await? {
+            Some(ChatFinishKind::Stop) => {
+                tx.send(SessionUpdate::TurnEnd {
+                    session,
+                    reason: StopReason::Stop,
+                })
+                .await?;
+                break;
+            }
             Some(ChatFinishKind::ToolCall) => (),
             None => {
                 println!("Unexpected agent loop break");

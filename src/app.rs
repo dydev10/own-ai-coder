@@ -1,15 +1,21 @@
 use std::io::Result;
 
-use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use ratatui::DefaultTerminal;
 use ratatui_textarea::TextArea;
+use tokio::{select, sync::mpsc};
 use tokio_stream::StreamExt;
 
-use crate::ui;
+use crate::{
+    backend::{Backend, llm::LlmBackend},
+    config::Config,
+    session::{SessionId, SessionUpdate},
+    ui,
+};
 
 pub enum Status {
     Idle,
-    //Streaming,
+    Streaming,
     //Cancelling,
 }
 
@@ -47,6 +53,9 @@ impl Default for ScrollState {
 }
 
 pub struct App {
+    backend: Backend,
+    updates: mpsc::Receiver<SessionUpdate>,
+    session: SessionId,
     pub transcript: Vec<Item>,
     pub input: TextArea<'static>,
     pub scroll: ScrollState,
@@ -57,8 +66,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(config: Config) -> Self {
+        let (tx, rx) = mpsc::channel(256);
         App {
+            backend: Backend::Llm(LlmBackend::new(config.provider, tx)),
+            updates: rx,
+            session: SessionId(1), // only one active session for now, hardcoded to id 1
             //transcript: vec![],
             transcript: createMockItems(),
             input: TextArea::default(),
@@ -73,9 +86,14 @@ impl App {
         while !self.should_quit {
             terminal.draw(|frame| ui::draw(frame, &self))?;
 
-            if let Some(Ok(event)) = tui_events.next().await {
-                if let Some(action) = self.handle_event(event) {
-                    self.update(action);
+            select! {
+                Some(Ok(event)) = tui_events.next() => {
+                    if let Some(action) = self.handle_event(event) {
+                        self.update(action);
+                    }
+                }
+                Some(update) = self.updates.recv() => {
+                    self.apply_session_update(update);
                 }
             }
         }
@@ -86,14 +104,7 @@ impl App {
         match action {
             Action::Quit => self.should_quit = true,
             Action::Submit => {
-                let text = self.input.lines().join("\n");
-                if !text.trim().is_empty() {
-                    self.transcript.push(Item::User(text));
-                    self.input = TextArea::default();
-                }
-                // also pin scroll to bottom to show latest streamed content on Submit
-                self.scroll.pinned = true;
-                self.scroll_follow();
+                self.submit();
             }
             Action::Cancel => {
                 eprintln!("Cancel will be triggered here");
@@ -166,6 +177,37 @@ impl App {
         let max_scroll = self.max_scroll_offset();
         self.scroll.offset = self.scroll.offset.saturating_add(amount).min(max_scroll);
         self.scroll.pinned = self.scroll.offset == max_scroll;
+    }
+
+    fn submit(&mut self) {
+        let text = self.input.lines().join("\n");
+        if text.trim().is_empty() {
+            return;
+        }
+
+        self.transcript.push(Item::User(text.clone()));
+        self.input = TextArea::default();
+        self.status = Status::Streaming;
+
+        // submit the prompt to backend to start agent loop
+        self.backend.prompt(self.session, text);
+
+        // also pin scroll to bottom to show latest streamed content on Submit
+        self.scroll.pinned = true;
+        self.scroll_follow();
+    }
+
+    fn apply_session_update(&mut self, update: SessionUpdate) {
+        match update {
+            SessionUpdate::AgentMessageChunk { text, .. } => match self.transcript.last_mut() {
+                Some(Item::Assistant(s)) => s.push_str(&text),
+                Some(_) | None => self.transcript.push(Item::Assistant(text)),
+            },
+            SessionUpdate::TurnEnd { .. } => self.status = Status::Idle,
+            SessionUpdate::Failed { error, .. } => {
+                self.transcript.push(Item::Error(error));
+            }
+        }
     }
 }
 
