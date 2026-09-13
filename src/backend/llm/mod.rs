@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
+use tokio_stream::StreamExt;
 
 use crate::{
     session::{self, SessionId, SessionUpdate, StopReason},
@@ -93,9 +94,29 @@ struct ChatResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct ChatChunk {
+    choices: Vec<ChoiceChunk>,
+}
+
+#[derive(Debug, Deserialize)]
 struct Choice {
     message: ChatMessage,
     finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChoiceChunk {
+    delta: Delta,
+    finish_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct Delta {
+    #[serde(default)]
+    content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    //tool_calls:
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -166,6 +187,36 @@ struct WireToolFunction {
     parameters: serde_json::Value,
 }
 
+#[derive(Default)]
+struct ChatStreamState {
+    text: String,
+    finish_kind: Option<ChatFinishKind>,
+}
+
+impl ChatStreamState {
+    fn push_chunk(&mut self, chunk: ChatChunk, session: SessionId) -> Vec<SessionUpdate> {
+        let mut updates = Vec::new();
+
+        // read the first choice only, ignore multiple choice
+        let Some(choice) = chunk.choices.into_iter().next() else {
+            return updates;
+        };
+
+        if let Some(text) = choice.delta.content {
+            self.text.push_str(&text);
+
+            updates.push(SessionUpdate::AgentMessageChunk { session, text });
+        }
+
+        if let Some(reason) = choice.finish_reason.as_deref() {
+            self.finish_kind =
+                Some(ChatFinishKind::from_reason(reason).unwrap_or(ChatFinishKind::Stop));
+        }
+
+        updates
+    }
+}
+
 fn print_tool_reasoning(tool_name: &str, reasoning: &str) {
     return;
     eprintln!("/********\\");
@@ -225,22 +276,41 @@ async fn run_tool(
 async fn agent_loop_step(
     client: &Client<OpenAIConfig>,
     tools: &Vec<WireTool>,
-    model: &String,
+    config: &ProviderConfig,
     messages: &mut Vec<ChatMessage>,
     session: SessionId,
     tx: &mpsc::Sender<SessionUpdate>,
 ) -> Result<Option<ChatFinishKind>, Box<dyn std::error::Error + Send + Sync>> {
     // println!("Model: {}", model);
 
-    let response: Value = client
-        .chat()
-        .create_byot(ChatRequest {
-            model: model.clone(),
-            messages,
-            tools,
-            stream: false,
-        })
-        .await?;
+    let request_body = ChatRequest {
+        model: config.model.clone(),
+        messages,
+        tools,
+        stream: config.streaming,
+    };
+
+    if config.streaming {
+        let mut stream = client.chat().create_stream_byot(request_body).await?;
+        let mut state = ChatStreamState::default();
+        while let Some(stream_chunk) = stream.next().await {
+            let chunk: ChatChunk = stream_chunk?;
+            let updates = state.push_chunk(chunk, session);
+            for update in updates {
+                tx.send(update).await?
+            }
+        }
+
+        messages.push(ChatMessage {
+            kind: ChatMessageKind::Assistant,
+            role: "assistant".into(),
+            content: Some(state.text),
+        });
+
+        return Ok(state.finish_kind);
+    }
+
+    let response: Value = client.chat().create_byot(request_body).await?;
 
     // Extract the response kind
     let response_kind: Option<ChatFinishKind> =
@@ -311,7 +381,7 @@ async fn agent_loop_step(
     Ok(response_kind)
 }
 
-pub async fn run_agent_loop(
+async fn run_agent_loop(
     client: &Client<OpenAIConfig>,
     config: &ProviderConfig,
     history: &mut Vec<ChatMessage>,
@@ -322,7 +392,7 @@ pub async fn run_agent_loop(
     let tools = tools::specs().iter().map(WireTool::from).collect();
 
     loop {
-        match agent_loop_step(client, &tools, &config.model, history, session, tx).await? {
+        match agent_loop_step(client, &tools, config, history, session, tx).await? {
             Some(ChatFinishKind::Stop) => {
                 tx.send(SessionUpdate::TurnEnd {
                     session,

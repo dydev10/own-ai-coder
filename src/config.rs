@@ -34,7 +34,7 @@ impl Config {
                 base_url,
                 api_key,
                 model,
-                streaming: false,
+                streaming: true,
             },
         })
     }
