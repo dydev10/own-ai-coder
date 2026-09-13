@@ -29,12 +29,16 @@ impl Config {
         };
         eprintln!("Using Model: {}", model);
 
+        let streaming = env::var("ENABLE_STREAMING")
+            .map(|v| v == "true")
+            .unwrap_or(false);
+
         Ok(Self {
             provider: ProviderConfig {
                 base_url,
                 api_key,
                 model,
-                streaming: true,
+                streaming,
             },
         })
     }
