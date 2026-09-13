@@ -13,16 +13,19 @@ use crate::{
 
 const H_PADDING: u16 = 1;
 
-fn build_lines(items: &[Item]) -> Vec<Line<'static>> {
+fn build_lines(items: &[Item]) -> Vec<Line<'_>> {
     let mut lines: Vec<Line> = Vec::new();
 
     for item in items {
         match item {
             Item::User(text) => {
-                lines.push(Line::styled(text.clone(), Style::new().dim()).right_aligned())
+                lines.push(Line::styled(text, Style::new().dim()).right_aligned());
             }
-            Item::Assistant(text) => lines.push(Line::raw(text.clone())),
-            Item::Error(text) => lines.push(Line::styled(text.clone(), Style::new().red())),
+            Item::Assistant(text) => {
+                let markdown_lines = tui_markdown::from_str(text).lines;
+                lines.extend(markdown_lines);
+            }
+            Item::Error(text) => lines.push(Line::styled(text, Style::new().red())),
             Item::Tool(tool) => lines.push(tool_call::line(tool)),
         }
 

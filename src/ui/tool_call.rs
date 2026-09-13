@@ -3,27 +3,24 @@ use ratatui::{
     text::{Line, Span},
 };
 
-use crate::{
-    app::ToolItem,
-    session::{ToolCall, ToolStatus},
-};
+use crate::{app::ToolItem, session::ToolStatus};
 
-pub fn line(tool: &ToolItem) -> Line<'static> {
+pub fn line(tool: &ToolItem) -> Line<'_> {
     let mut spans = vec![
         glyph(&tool.status),
         Span::raw(" "),
-        Span::styled(tool.call.name.clone(), Style::new().bold()),
+        Span::styled(tool.call.name.as_str(), Style::new().bold()),
     ];
 
     if let Some(preview) = &tool.preview {
         spans.push(Span::raw(" "));
-        spans.push(Span::styled(preview.clone(), Style::new().dim()));
+        spans.push(Span::styled(preview.as_str(), Style::new().dim()));
     }
 
     Line::from(spans)
 }
 
-fn glyph(status: &ToolStatus) -> Span<'static> {
+fn glyph(status: &ToolStatus) -> Span<'_> {
     match status {
         ToolStatus::Pending => Span::styled("○", Style::new().dim()),
         ToolStatus::Running => Span::styled("◐", Style::new().yellow()),
