@@ -60,22 +60,6 @@ pub async fn bash(arguments: &str) -> ToolResult {
         output: text,
         success: res.status.success(),
     }
-
-    //let args = Value::from_str(arguments).ok()?;
-    //let command = args["command"].as_str()?;
-
-    //let res = Command::new("sh").arg("-c").arg(command).output().unwrap();
-
-    //let stdout = String::from_utf8_lossy(&res.stdout).to_string();
-    //let stderr = String::from_utf8_lossy(&res.stderr).to_string();
-
-    //if res.status.success() {
-    //    eprintln!("Command Executed on sh {:?}", command);
-    //    Some(stdout)
-    //} else {
-    //    eprintln!("Failed to Execute on sh {:?}", command);
-    //    Some(stderr)
-    //}
 }
 
 // tool specs
@@ -94,23 +78,11 @@ pub fn bash_spec() -> ToolSpec {
             }
         }),
     }
+}
 
-    //let bash_tool_def = WireTool {
-    //    kind: String::from("function"),
-    //    function: ToolDefFunction {
-    //        name: String::from("Bash"),
-    //        description: String::from("Execute a shell command"),
-    //        parameters: ToolDefParameters {
-    //            kind: String::from("object"),
-    //            required: vec![String::from("command")],
-    //            properties: HashMap::from([(
-    //                String::from("command"),
-    //                ToolDefProperty {
-    //                    kind: String::from("string"),
-    //                    description: String::from("The command to execute"),
-    //                },
-    //            )]),
-    //        },
-    //    },
-    //};
+// primary arg
+pub fn bash_primary_arg(arguments: &str) -> Option<String> {
+    serde_json::from_str::<BashArgs>(arguments)
+        .ok()
+        .map(|a| a.command)
 }

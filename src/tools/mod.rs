@@ -46,6 +46,14 @@ pub fn specs() -> Vec<ToolSpec> {
     vec![read_file_spec(), write_file_spec(), bash_spec()]
 }
 
+pub fn primary_arg(name: &str, arguments: &str) -> Option<String> {
+    match ToolKind::from_name(name)? {
+        ToolKind::ReadFile => fs::read_file_primary_arg(arguments),
+        ToolKind::WriteFile => fs::write_file_primary_arg(arguments),
+        ToolKind::Bash => command::bash_primary_arg(arguments),
+    }
+}
+
 pub async fn execute(name: &str, arguments: &str) -> ToolResult {
     let Some(tool_kind) = ToolKind::from_name(name) else {
         return ToolResult {

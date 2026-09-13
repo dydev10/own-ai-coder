@@ -1,5 +1,6 @@
 pub mod status;
 pub mod textarea;
+pub mod tool_call;
 pub mod transcript;
 
 use ratatui::{

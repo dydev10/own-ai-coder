@@ -10,7 +10,7 @@ use crate::{
     backend::{Backend, llm::LlmBackend},
     config::Config,
     session::{SessionId, SessionUpdate, ToolCall, ToolCallId, ToolStatus},
-    ui,
+    tools, ui,
 };
 
 pub enum Status {
@@ -23,6 +23,7 @@ pub struct ToolItem {
     pub call: ToolCall,
     pub status: ToolStatus,
     pub expanded: bool,
+    pub preview: Option<String>,
 }
 
 pub enum Item {
@@ -221,6 +222,7 @@ impl App {
             },
             SessionUpdate::ToolCallStarted { call, .. } => {
                 self.transcript.push(Item::Tool(ToolItem {
+                    preview: tools::primary_arg(&call.name, &call.arguments),
                     call,
                     status: ToolStatus::Pending,
                     expanded: false,

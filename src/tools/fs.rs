@@ -107,3 +107,16 @@ pub fn write_file_spec() -> ToolSpec {
         }),
     }
 }
+
+// primary arg
+pub fn read_file_primary_arg(arguments: &str) -> Option<String> {
+    serde_json::from_str::<ReadFileArgs>(arguments)
+        .ok()
+        .map(|a| a.file_path)
+}
+
+pub fn write_file_primary_arg(arguments: &str) -> Option<String> {
+    serde_json::from_str::<WriteFileArgs>(arguments)
+        .ok()
+        .map(|a| a.file_path)
+}
