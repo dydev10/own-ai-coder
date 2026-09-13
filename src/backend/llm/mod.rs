@@ -1,7 +1,7 @@
 use async_openai::{Client, config::OpenAIConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::{Mutex, mpsc};
 use tokio_stream::StreamExt;
 
@@ -115,8 +115,8 @@ struct Delta {
     #[serde(default)]
     content: Option<String>,
     #[serde(default)]
-    reasoning: Option<String>,
-    //tool_calls:
+    //reasoning: Option<String>,
+    tool_calls: Option<Vec<ToolCallChunk>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -154,6 +154,15 @@ impl From<WireToolCall> for session::ToolCall {
     }
 }
 
+#[derive(Debug, Deserialize)]
+struct ToolCallChunk {
+    index: usize,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    function: Option<ToolFunctionChunk>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct WireToolCallArgs {
     name: String,
@@ -187,10 +196,57 @@ struct WireToolFunction {
     parameters: serde_json::Value,
 }
 
-#[derive(Default)]
+#[derive(Debug, Deserialize)]
+struct ToolFunctionChunk {
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    arguments: Option<String>,
+}
+
+#[derive(Debug, Default)]
+struct PartialToolCall {
+    id: String,
+    name: String,
+    arguments: String,
+}
+
+impl PartialToolCall {
+    fn push_chunk(&mut self, chunk: ToolCallChunk) {
+        if let Some(id) = chunk.id {
+            self.id = id;
+        }
+
+        if let Some(function) = chunk.function {
+            if let Some(name) = function.name {
+                self.name = name;
+            }
+
+            if let Some(arguments) = function.arguments {
+                self.arguments.push_str(&arguments);
+            }
+        }
+    }
+}
+
+impl From<PartialToolCall> for WireToolCall {
+    fn from(value: PartialToolCall) -> Self {
+        WireToolCall {
+            id: value.id,
+            r#type: "function".into(),
+            function: WireToolCallArgs {
+                name: value.name,
+                arguments: value.arguments,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Default)]
 struct ChatStreamState {
     text: String,
     finish_kind: Option<ChatFinishKind>,
+    tool_calls: BTreeMap<usize, PartialToolCall>,
 }
 
 impl ChatStreamState {
@@ -206,6 +262,14 @@ impl ChatStreamState {
             self.text.push_str(&text);
 
             updates.push(SessionUpdate::AgentMessageChunk { session, text });
+        }
+
+        // tool calls
+        if let Some(chunk_calls) = choice.delta.tool_calls {
+            for call in chunk_calls {
+                let partial_entry = self.tool_calls.entry(call.index).or_default();
+                partial_entry.push_chunk(call);
+            }
         }
 
         if let Some(reason) = choice.finish_reason.as_deref() {
@@ -301,11 +365,36 @@ async fn agent_loop_step(
             }
         }
 
-        messages.push(ChatMessage {
-            kind: ChatMessageKind::Assistant,
-            role: "assistant".into(),
-            content: Some(state.text),
-        });
+        match &state.finish_kind {
+            Some(ChatFinishKind::ToolCall) => {
+                let calls: Vec<WireToolCall> = state
+                    .tool_calls
+                    .into_values()
+                    .map(WireToolCall::from)
+                    .collect();
+
+                messages.push(ChatMessage {
+                    kind: ChatMessageKind::ToolCalls {
+                        tool_calls: calls.clone(),
+                    },
+                    role: "assistant".into(),
+                    content: (!state.text.is_empty()).then_some(state.text),
+                });
+
+                for call in calls {
+                    let tool_message = run_tool(call, session, tx).await;
+                    messages.push(tool_message);
+                }
+            }
+            Some(ChatFinishKind::Stop) => {
+                messages.push(ChatMessage {
+                    kind: ChatMessageKind::Assistant,
+                    role: "assistant".into(),
+                    content: Some(state.text),
+                });
+            }
+            _ => {}
+        }
 
         return Ok(state.finish_kind);
     }
