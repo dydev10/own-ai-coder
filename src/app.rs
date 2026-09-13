@@ -236,6 +236,7 @@ impl App {
             SessionUpdate::TurnEnd { .. } => self.status = Status::Idle,
             SessionUpdate::Failed { error, .. } => {
                 self.transcript.push(Item::Error(error));
+                self.status = Status::Idle;
             }
         }
 
