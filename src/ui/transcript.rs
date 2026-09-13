@@ -6,7 +6,10 @@ use ratatui::{
     widgets::{Block, Padding, Paragraph, Wrap},
 };
 
-use crate::app::{Item, ScrollState};
+use crate::{
+    app::{Item, ScrollState},
+    session::ToolStatus,
+};
 
 const H_PADDING: u16 = 1;
 
@@ -20,6 +23,14 @@ fn build_lines(items: &[Item]) -> Vec<Line<'static>> {
             }
             Item::Assistant(text) => lines.push(Line::raw(text.clone())),
             Item::Error(text) => lines.push(Line::styled(text.clone(), Style::new().red())),
+            Item::Tool(tool) => {
+                let style = match tool.status {
+                    ToolStatus::Pending | ToolStatus::Running => Style::new().yellow(),
+                    ToolStatus::Complete { .. } => Style::new().green().dim(),
+                    ToolStatus::Failed { .. } => Style::new().red().dim(),
+                };
+                lines.push(Line::styled(tool.call.name.clone(), style))
+            }
         }
 
         lines.push(Line::raw(""));

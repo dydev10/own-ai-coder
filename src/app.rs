@@ -9,7 +9,7 @@ use tokio_stream::StreamExt;
 use crate::{
     backend::{Backend, llm::LlmBackend},
     config::Config,
-    session::{SessionId, SessionUpdate},
+    session::{SessionId, SessionUpdate, ToolCall, ToolCallId, ToolStatus},
     ui,
 };
 
@@ -19,11 +19,17 @@ pub enum Status {
     //Cancelling,
 }
 
+pub struct ToolItem {
+    pub call: ToolCall,
+    pub status: ToolStatus,
+    pub expanded: bool,
+}
+
 pub enum Item {
     User(String),
     Assistant(String),
     //Thought(String),
-    //Tool(ToolCall, ToolStatus),
+    Tool(ToolItem),
     Error(String),
 }
 
@@ -197,12 +203,34 @@ impl App {
         self.scroll_follow();
     }
 
+    fn find_tool_item_mut(&mut self, id: &ToolCallId) -> Option<&mut ToolItem> {
+        self.transcript
+            .iter_mut()
+            .rev()
+            .find_map(|item| match item {
+                Item::Tool(tool) if tool.call.id == *id => Some(tool),
+                _ => None,
+            })
+    }
+
     fn apply_session_update(&mut self, update: SessionUpdate) {
         match update {
             SessionUpdate::AgentMessageChunk { text, .. } => match self.transcript.last_mut() {
                 Some(Item::Assistant(s)) => s.push_str(&text),
                 Some(_) | None => self.transcript.push(Item::Assistant(text)),
             },
+            SessionUpdate::ToolCallStarted { call, .. } => {
+                self.transcript.push(Item::Tool(ToolItem {
+                    call,
+                    status: ToolStatus::Pending,
+                    expanded: false,
+                }));
+            }
+            SessionUpdate::ToolCallUpdate { id, status, .. } => {
+                if let Some(tool) = self.find_tool_item_mut(&id) {
+                    tool.status = status;
+                }
+            }
             SessionUpdate::TurnEnd { .. } => self.status = Status::Idle,
             SessionUpdate::Failed { error, .. } => {
                 self.transcript.push(Item::Error(error));

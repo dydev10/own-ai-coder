@@ -1,10 +1,13 @@
 use async_openai::{Client, config::OpenAIConfig};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{collections::HashMap, fs, process::Command, str::FromStr, sync::Arc};
+use std::sync::Arc;
 use tokio::sync::{Mutex, mpsc};
 
-use crate::session::{SessionId, SessionUpdate, StopReason};
+use crate::{
+    session::{self, SessionId, SessionUpdate, StopReason},
+    tools,
+};
 
 #[derive(Debug)]
 pub struct LlmBackend {
@@ -80,7 +83,7 @@ impl ChatFinishKind {
 struct ChatRequest<'a> {
     model: String,
     messages: &'a [ChatMessage],
-    tools: &'a [ToolDef],
+    tools: &'a [WireTool],
     stream: bool,
 }
 
@@ -96,7 +99,7 @@ struct Choice {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct ChatMessage {
+struct ChatMessage {
     // #[serde(skip_serializing)]
     #[serde(flatten)]
     pub kind: ChatMessageKind,
@@ -106,56 +109,65 @@ pub struct ChatMessage {
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum ChatMessageKind {
+enum ChatMessageKind {
     User,
     Assistant,
     Tool { tool_call_id: String },
-    ToolCalls { tool_calls: Vec<ToolCall> },
+    ToolCalls { tool_calls: Vec<WireToolCall> },
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct ToolCall {
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WireToolCall {
     id: String,
     r#type: String,
-    function: ToolCallArgs,
+    function: WireToolCallArgs,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct ToolCallArgs {
+impl From<WireToolCall> for session::ToolCall {
+    fn from(value: WireToolCall) -> Self {
+        session::ToolCall {
+            id: session::ToolCallId(value.id),
+            name: value.function.name,
+            arguments: value.function.arguments,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WireToolCallArgs {
     name: String,
     arguments: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ToolDef {
+struct WireTool {
     #[serde(rename = "type")]
     kind: String,
-    function: ToolDefFunction,
+    function: WireToolFunction,
+}
+
+impl From<&tools::ToolSpec> for WireTool {
+    fn from(s: &tools::ToolSpec) -> Self {
+        Self {
+            kind: "function".into(),
+            function: WireToolFunction {
+                name: s.name.into(),
+                description: s.description.into(),
+                parameters: s.parameters.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct ToolDefProperty {
-    #[serde(rename = "type")]
-    kind: String,
-    description: String,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ToolDefParameters {
-    #[serde(rename = "type")]
-    kind: String,
-    required: Vec<String>,
-    properties: HashMap<String, ToolDefProperty>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-struct ToolDefFunction {
+struct WireToolFunction {
     name: String,
     description: String,
-    parameters: ToolDefParameters,
+    parameters: serde_json::Value,
 }
 
 fn print_tool_reasoning(tool_name: &str, reasoning: &str) {
+    return;
     eprintln!("/********\\");
     eprintln!("Reasoning to call tool: {tool_name}");
     eprintln!("------",);
@@ -165,151 +177,54 @@ fn print_tool_reasoning(tool_name: &str, reasoning: &str) {
     eprintln!("\n");
 }
 
-fn tool_call(id: &str, name: &str, arguments: &str) -> Option<ChatMessage> {
-    let mut content = None;
-    match name {
-        "Read" => {
-            content = read_tool(arguments);
+async fn run_tool(
+    tool_call: WireToolCall,
+    session: SessionId,
+    tx: &mpsc::Sender<SessionUpdate>,
+) -> ChatMessage {
+    let session_tool_call: session::ToolCall = tool_call.clone().into();
+
+    // Notify app about tool call before it starts
+    let _ = tx
+        .send(SessionUpdate::ToolCallStarted {
+            session,
+            call: session_tool_call.clone(),
+        })
+        .await;
+
+    let res = tools::execute(&tool_call.function.name, &tool_call.function.arguments).await;
+
+    let tool_status = if res.success {
+        session::ToolStatus::Complete {
+            output: res.output.clone(),
         }
-        "Write" => {
-            content = write_tool(arguments);
-        }
-        "Bash" => {
-            content = bash_tool(arguments);
-        }
-        _ => {
-            println!("Unknown tool called: {:?}", name);
-        }
-    }
-    content.map(|text| ChatMessage {
-        kind: ChatMessageKind::Tool {
-            tool_call_id: String::from(id),
-        },
-        role: String::from("tool"),
-        content: Some(text),
-    })
-}
-
-fn read_tool(arguments: &str) -> Option<String> {
-    match Value::from_str(arguments) {
-        Ok(args) => match args["file_path"].as_str() {
-            Some(file_path) => match fs::read_to_string(file_path) {
-                Ok(content) => Some(content),
-                Err(_err) => {
-                    println!("Cant read the file: {}", file_path);
-                    None
-                }
-            },
-            None => None,
-        },
-        Err(_err) => {
-            println!("json parse error in args");
-            None
-        }
-    }
-}
-
-fn write_tool(arguments: &str) -> Option<String> {
-    let args = Value::from_str(arguments).ok()?;
-    let file_path = args["file_path"].as_str()?;
-    let content = args["content"].as_str()?;
-
-    fs::write(file_path, content).ok()?;
-    eprintln!("Write Successful to the file: {}", file_path);
-    Some(String::from("Done."))
-}
-
-fn bash_tool(arguments: &str) -> Option<String> {
-    let args = Value::from_str(arguments).ok()?;
-    let command = args["command"].as_str()?;
-
-    let res = Command::new("sh").arg("-c").arg(command).output().unwrap();
-
-    let stdout = String::from_utf8_lossy(&res.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&res.stderr).to_string();
-
-    if res.status.success() {
-        eprintln!("Command Executed on sh {:?}", command);
-        Some(stdout)
     } else {
-        eprintln!("Failed to Execute on sh {:?}", command);
-        Some(stderr)
+        session::ToolStatus::Failed {
+            error: res.output.clone(),
+        }
+    };
+
+    // Notify app about tool finish with status
+    let _ = tx
+        .send(SessionUpdate::ToolCallUpdate {
+            session,
+            id: session_tool_call.id,
+            status: tool_status,
+        })
+        .await;
+
+    ChatMessage {
+        kind: ChatMessageKind::Tool {
+            tool_call_id: tool_call.id.to_string(),
+        },
+        role: "tool".to_string(),
+        content: Some(res.output),
     }
-}
-
-fn build_tool_defs() -> Vec<ToolDef> {
-    let read_tool_def = ToolDef {
-        kind: String::from("function"),
-        function: ToolDefFunction {
-            name: String::from("Read"),
-            description: String::from("Read and return the contents of a file"),
-            parameters: ToolDefParameters {
-                kind: String::from("object"),
-                required: vec![String::from("file_path")],
-                properties: HashMap::from([(
-                    String::from("file_path"),
-                    ToolDefProperty {
-                        kind: String::from("string"),
-                        description: String::from("The path to the file to read"),
-                    },
-                )]),
-            },
-        },
-    };
-
-    let write_tool_def = ToolDef {
-        kind: String::from("function"),
-        function: ToolDefFunction {
-            name: String::from("Write"),
-            description: String::from("Write content to a file"),
-            parameters: ToolDefParameters {
-                kind: String::from("object"),
-                required: vec![String::from("file_path"), String::from("content")],
-                properties: HashMap::from([
-                    (
-                        String::from("file_path"),
-                        ToolDefProperty {
-                            kind: String::from("string"),
-                            description: String::from("The path of the file to write to"),
-                        },
-                    ),
-                    (
-                        String::from("content"),
-                        ToolDefProperty {
-                            kind: String::from("string"),
-                            description: String::from("The content to write to the file"),
-                        },
-                    ),
-                ]),
-            },
-        },
-    };
-
-    let bash_tool_def = ToolDef {
-        kind: String::from("function"),
-        function: ToolDefFunction {
-            name: String::from("Bash"),
-            description: String::from("Execute a shell command"),
-            parameters: ToolDefParameters {
-                kind: String::from("object"),
-                required: vec![String::from("command")],
-                properties: HashMap::from([(
-                    String::from("command"),
-                    ToolDefProperty {
-                        kind: String::from("string"),
-                        description: String::from("The command to execute"),
-                    },
-                )]),
-            },
-        },
-    };
-
-    vec![read_tool_def, write_tool_def, bash_tool_def]
 }
 
 async fn agent_loop_step(
     client: &Client<OpenAIConfig>,
-    tools: &Vec<ToolDef>,
+    tools: &Vec<WireTool>,
     model: &String,
     messages: &mut Vec<ChatMessage>,
     session: SessionId,
@@ -361,13 +276,9 @@ async fn agent_loop_step(
                 let tool_call_data = response["choices"][0]["message"]["tool_calls"].as_array();
                 if let Some(tools) = tool_call_data {
                     for (i, tool) in tools.iter().enumerate() {
-                        let tool_call_id = tool["id"].as_str().expect("tool_call_id found in json");
                         let tool_name = tool["function"]["name"]
                             .as_str()
                             .expect("tool_name not found in json");
-                        let tool_args = tool["function"]["arguments"]
-                            .as_str()
-                            .expect("tool_args not found in json");
 
                         // print reasoning for every tool call
                         if let Some(reasoning) =
@@ -376,21 +287,20 @@ async fn agent_loop_step(
                             print_tool_reasoning(tool_name, reasoning);
                         }
 
-                        let tool_call_i = serde_json::from_value::<ToolCall>(
+                        let tool_call_i = serde_json::from_value::<WireToolCall>(
                             response["choices"][0]["message"]["tool_calls"][i].clone(),
                         )
                         .expect("tool_call_i not found in json");
                         messages.push(ChatMessage {
                             kind: ChatMessageKind::ToolCalls {
-                                tool_calls: vec![tool_call_i],
+                                tool_calls: vec![tool_call_i.clone()],
                             },
                             role: String::from("assistant"),
                             content: None,
                         });
 
-                        if let Some(message) = tool_call(tool_call_id, tool_name, tool_args) {
-                            messages.push(message);
-                        }
+                        let tool_output_message = run_tool(tool_call_i, session, tx).await;
+                        messages.push(tool_output_message);
                     }
                 }
             }
@@ -409,10 +319,10 @@ pub async fn run_agent_loop(
     tx: &mpsc::Sender<SessionUpdate>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // todo: move this outside of run_agent_loop
-    let tools = build_tool_defs();
+    let tools = tools::specs().iter().map(WireTool::from).collect();
 
     loop {
-        match agent_loop_step(&client, &tools, &config.model, history, session, tx).await? {
+        match agent_loop_step(client, &tools, &config.model, history, session, tx).await? {
             Some(ChatFinishKind::Stop) => {
                 tx.send(SessionUpdate::TurnEnd {
                     session,

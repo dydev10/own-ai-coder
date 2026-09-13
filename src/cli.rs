@@ -25,6 +25,12 @@ pub async fn run(config: Config, text: String) {
                 eprintln!("error: {error}");
                 break;
             }
+            SessionUpdate::ToolCallStarted { .. } => {
+                eprintln!("called tool");
+            }
+            SessionUpdate::ToolCallUpdate { .. } => {
+                eprintln!("update called tool");
+            }
         }
     }
 }

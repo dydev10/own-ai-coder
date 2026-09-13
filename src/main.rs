@@ -3,6 +3,7 @@ mod backend;
 mod cli;
 mod config;
 mod session;
+mod tools;
 mod ui;
 
 use clap::Parser;
