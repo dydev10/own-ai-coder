@@ -238,6 +238,9 @@ impl App {
                 self.transcript.push(Item::Error(error));
             }
         }
+
+        // scroll to bottom after apply update if pinned
+        self.scroll_follow();
     }
 }
 
