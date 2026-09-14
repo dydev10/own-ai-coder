@@ -1,5 +1,3 @@
-use std::process::Command;
-
 use serde::Deserialize;
 use serde_json::json;
 
@@ -21,7 +19,12 @@ pub async fn bash(arguments: &str) -> ToolResult {
         }
     };
 
-    let res = match Command::new("sh").arg("-c").arg(&args.command).output() {
+    let res = match tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(&args.command)
+        .output()
+        .await
+    {
         Ok(o) => o,
         Err(e) => {
             // eprintln!("Failed to Execute on sh {}", arg.command);

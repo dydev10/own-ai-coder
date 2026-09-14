@@ -25,7 +25,7 @@ pub async fn read_file(arguments: &str) -> ToolResult {
         }
     };
 
-    match std::fs::read_to_string(&args.file_path) {
+    match tokio::fs::read_to_string(&args.file_path).await {
         Ok(content) => ToolResult {
             output: content,
             success: true,
@@ -51,7 +51,7 @@ pub async fn write_file(arguments: &str) -> ToolResult {
         }
     };
 
-    match std::fs::write(&args.file_path, &args.content) {
+    match tokio::fs::write(&args.file_path, &args.content).await {
         Ok(()) => {
             //eprintln!("Write Successful to the file: {}", args.file_path);
             ToolResult {

@@ -9,6 +9,10 @@ rust-version = "1.94"
 tokio = { version = "1", features = [
   "macros",
   "rt-multi-thread",
+  "sync",
+  "time",
+  "fs",
+  "process",
 ] } # async runtime
 async-openai = { version = "0.41.3", features = ["byot", "chat-completion"] }
 clap = { version = "4.3.14", features = ["derive"] } # CLI argument parsing
