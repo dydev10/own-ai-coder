@@ -492,7 +492,12 @@ async fn run_agent_loop(
             }
             Some(ChatFinishKind::ToolCall) => (),
             None => {
-                println!("Unexpected agent loop break");
+                tx.send(SessionUpdate::Failed {
+                    session,
+                    error: "Unexpected agent loop break: Unknown finish_reason".into(),
+                })
+                .await?;
+                //println!("Unexpected agent loop break");
                 break;
             }
         }
