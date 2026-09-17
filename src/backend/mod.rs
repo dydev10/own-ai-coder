@@ -14,4 +14,11 @@ impl Backend {
             // more backend will be matched here
         }
     }
+
+    pub fn cancel(&mut self, session: SessionId) {
+        match self {
+            Backend::Llm(llm) => llm.cancel(),
+            // more backend will be matched here
+        }
+    }
 }

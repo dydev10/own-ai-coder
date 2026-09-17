@@ -4,9 +4,7 @@ pub struct SessionId(pub u64);
 #[derive(Debug, Clone, Copy)]
 pub enum StopReason {
     Stop,
-    ToolCall,
     Cancelled,
-    Error,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

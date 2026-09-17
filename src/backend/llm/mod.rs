@@ -4,6 +4,7 @@ use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::{Mutex, mpsc};
 use tokio_stream::StreamExt;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     session::{self, SessionId, SessionUpdate, StopReason},
@@ -16,6 +17,7 @@ pub struct LlmBackend {
     config: ProviderConfig,
     history: Arc<Mutex<Vec<ChatMessage>>>,
     tx: mpsc::Sender<SessionUpdate>,
+    cancel: Option<CancellationToken>,
 }
 
 impl LlmBackend {
@@ -29,9 +31,13 @@ impl LlmBackend {
             config,
             history: Arc::new(Mutex::new(Vec::new())),
             tx,
+            cancel: None,
         }
     }
     pub fn prompt(&mut self, session: SessionId, text: String) {
+        let cancel_token = CancellationToken::new();
+        self.cancel = Some(cancel_token.clone());
+
         let history = self.history.clone();
         let (client, config, tx) = (self.client.clone(), self.config.clone(), self.tx.clone());
 
@@ -43,7 +49,15 @@ impl LlmBackend {
                 content: Some(text),
             });
 
-            if let Err(e) = run_agent_loop(&client, &config, &mut history_guard, session, &tx).await
+            if let Err(e) = run_agent_loop(
+                &client,
+                &config,
+                &mut history_guard,
+                session,
+                &tx,
+                &cancel_token,
+            )
+            .await
             {
                 let _ = tx
                     .send(SessionUpdate::Failed {
@@ -53,6 +67,12 @@ impl LlmBackend {
                     .await;
             }
         });
+    }
+
+    pub fn cancel(&mut self) {
+        if let Some(token) = self.cancel.take() {
+            token.cancel();
+        }
     }
 }
 
@@ -344,6 +364,7 @@ async fn agent_loop_step(
     messages: &mut Vec<ChatMessage>,
     session: SessionId,
     tx: &mpsc::Sender<SessionUpdate>,
+    cancel_token: &CancellationToken,
 ) -> Result<Option<ChatFinishKind>, Box<dyn std::error::Error + Send + Sync>> {
     // println!("Model: {}", model);
 
@@ -357,11 +378,18 @@ async fn agent_loop_step(
     if config.streaming {
         let mut stream = client.chat().create_stream_byot(request_body).await?;
         let mut state = ChatStreamState::default();
-        while let Some(stream_chunk) = stream.next().await {
-            let chunk: ChatChunk = stream_chunk?;
-            let updates = state.push_chunk(chunk, session);
-            for update in updates {
-                tx.send(update).await?
+
+        loop {
+            tokio::select! {
+                _ = cancel_token.cancelled() => return Ok(None),
+                maybe_chunk = stream.next() => {
+                    let Some(next_chunk) = maybe_chunk else { break };
+                    let chunk: ChatChunk = next_chunk?;
+                    let updates = state.push_chunk(chunk, session);
+                    for update in updates {
+                        tx.send(update).await?
+                    }
+                }
             }
         }
 
@@ -382,6 +410,9 @@ async fn agent_loop_step(
                 });
 
                 for call in calls {
+                    if cancel_token.is_cancelled() {
+                        break;
+                    }
                     let tool_message = run_tool(call, session, tx).await;
                     messages.push(tool_message);
                 }
@@ -476,12 +507,25 @@ async fn run_agent_loop(
     history: &mut Vec<ChatMessage>,
     session: SessionId,
     tx: &mpsc::Sender<SessionUpdate>,
+    cancel_token: &CancellationToken,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // todo: move this outside of run_agent_loop
     let tools = tools::specs().iter().map(WireTool::from).collect();
 
+    let turn_checkpoint = history.len();
+
     loop {
-        match agent_loop_step(client, &tools, config, history, session, tx).await? {
+        if cancel_token.is_cancelled() {
+            history.truncate(turn_checkpoint);
+            tx.send(SessionUpdate::TurnEnd {
+                session,
+                reason: StopReason::Cancelled,
+            })
+            .await?;
+            break;
+        }
+
+        match agent_loop_step(client, &tools, config, history, session, tx, cancel_token).await? {
             Some(ChatFinishKind::Stop) => {
                 tx.send(SessionUpdate::TurnEnd {
                     session,
@@ -490,7 +534,8 @@ async fn run_agent_loop(
                 .await?;
                 break;
             }
-            Some(ChatFinishKind::ToolCall) => (),
+            Some(ChatFinishKind::ToolCall) => continue,
+            None if cancel_token.is_cancelled() => continue, // aborts on next iteration
             None => {
                 tx.send(SessionUpdate::Failed {
                     session,

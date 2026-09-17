@@ -9,14 +9,15 @@ use tokio_stream::StreamExt;
 use crate::{
     backend::{Backend, llm::LlmBackend},
     config::Config,
-    session::{SessionId, SessionUpdate, ToolCall, ToolCallId, ToolStatus},
+    session::{SessionId, SessionUpdate, StopReason, ToolCall, ToolCallId, ToolStatus},
     tools, ui,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Status {
     Idle,
     Streaming,
-    //Cancelling,
+    Cancelling,
 }
 
 pub struct ToolItem {
@@ -114,7 +115,7 @@ impl App {
                 self.submit();
             }
             Action::Cancel => {
-                eprintln!("Cancel will be triggered here");
+                self.cancel();
             }
             Action::Input(key) => {
                 self.input.input(key);
@@ -150,6 +151,7 @@ impl App {
         match (key.modifiers, key.code) {
             (KeyModifiers::CONTROL, KeyCode::Char('c')) => Some(Action::Quit),
             (KeyModifiers::NONE, KeyCode::Enter) => Some(Action::Submit),
+            (KeyModifiers::NONE, KeyCode::Esc) => Some(Action::Cancel),
             // scroll
             (KeyModifiers::CONTROL, KeyCode::Char('u')) => Some(Action::ScrollUp),
             (KeyModifiers::CONTROL, KeyCode::Char('d')) => Some(Action::ScrollDown),
@@ -204,6 +206,13 @@ impl App {
         self.scroll_follow();
     }
 
+    fn cancel(&mut self) {
+        if self.status == Status::Streaming {
+            self.status = Status::Cancelling;
+            self.backend.cancel(self.session);
+        }
+    }
+
     fn find_tool_item_mut(&mut self, id: &ToolCallId) -> Option<&mut ToolItem> {
         self.transcript
             .iter_mut()
@@ -233,7 +242,17 @@ impl App {
                     tool.status = status;
                 }
             }
-            SessionUpdate::TurnEnd { .. } => self.status = Status::Idle,
+            SessionUpdate::TurnEnd { reason, .. } => {
+                self.status = Status::Idle;
+                match reason {
+                    StopReason::Cancelled => {
+                        // temp: push cancel as error on chat, TODO: add new Item type
+                        self.transcript
+                            .push(Item::Error("Cancelled by user".into()));
+                    }
+                    StopReason::Stop => {}
+                }
+            }
             SessionUpdate::Failed { error, .. } => {
                 self.transcript.push(Item::Error(error));
                 self.status = Status::Idle;
