@@ -1,3 +1,5 @@
+use tokio_util::sync::CancellationToken;
+
 use crate::tools::{
     command::bash_spec,
     fs::{read_file_spec, write_file_spec},
@@ -54,7 +56,7 @@ pub fn primary_arg(name: &str, arguments: &str) -> Option<String> {
     }
 }
 
-pub async fn execute(name: &str, arguments: &str) -> ToolResult {
+pub async fn execute(name: &str, arguments: &str, cancel_token: &CancellationToken) -> ToolResult {
     let Some(tool_kind) = ToolKind::from_name(name) else {
         return ToolResult {
             output: format!("unknown tool : {name}"),
@@ -65,6 +67,6 @@ pub async fn execute(name: &str, arguments: &str) -> ToolResult {
     match tool_kind {
         ToolKind::ReadFile => fs::read_file(arguments).await,
         ToolKind::WriteFile => fs::write_file(arguments).await,
-        ToolKind::Bash => command::bash(arguments).await,
+        ToolKind::Bash => command::bash(arguments, cancel_token).await,
     }
 }

@@ -1,5 +1,8 @@
+use std::process::Stdio;
+
 use serde::Deserialize;
 use serde_json::json;
+use tokio_util::sync::CancellationToken;
 
 use crate::tools::{ToolKind, ToolResult, ToolSpec};
 
@@ -8,7 +11,7 @@ struct BashArgs {
     command: String,
 }
 
-pub async fn bash(arguments: &str) -> ToolResult {
+pub async fn bash(arguments: &str, cancel_token: &CancellationToken) -> ToolResult {
     let args = match serde_json::from_str::<BashArgs>(arguments) {
         Ok(a) => a,
         Err(e) => {
@@ -19,19 +22,40 @@ pub async fn bash(arguments: &str) -> ToolResult {
         }
     };
 
-    let res = match tokio::process::Command::new("sh")
+    let child = match tokio::process::Command::new("sh")
         .arg("-c")
         .arg(&args.command)
-        .output()
-        .await
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
     {
-        Ok(o) => o,
+        Ok(c) => c,
         Err(e) => {
             // eprintln!("Failed to Execute on sh {}", arg.command);
             return ToolResult {
                 output: format!("could not start shell: {e}"),
                 success: false,
             };
+        }
+    };
+
+    let res = tokio::select! {
+            _ = cancel_token.cancelled() => {
+                return ToolResult {
+                    output: "cancelled".into(),
+                    success: false
+                }
+            }
+        out = child.wait_with_output() => match out {
+            Ok(o) => o,
+            Err(e) => {
+                // eprintln!("Failed to Execute on sh {}", arg.command);
+                return ToolResult {
+                    output: format!("shell command failed: {e}"),
+                    success: false,
+                };
+            }
         }
     };
 

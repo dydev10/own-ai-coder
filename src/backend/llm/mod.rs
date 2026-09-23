@@ -316,6 +316,7 @@ async fn run_tool(
     tool_call: WireToolCall,
     session: SessionId,
     tx: &mpsc::Sender<SessionUpdate>,
+    cancel_token: &CancellationToken,
 ) -> ChatMessage {
     let session_tool_call: session::ToolCall = tool_call.clone().into();
 
@@ -327,7 +328,12 @@ async fn run_tool(
         })
         .await;
 
-    let res = tools::execute(&tool_call.function.name, &tool_call.function.arguments).await;
+    let res = tools::execute(
+        &tool_call.function.name,
+        &tool_call.function.arguments,
+        cancel_token,
+    )
+    .await;
 
     let tool_status = if res.success {
         session::ToolStatus::Complete {
@@ -413,7 +419,7 @@ async fn agent_loop_step(
                     if cancel_token.is_cancelled() {
                         break;
                     }
-                    let tool_message = run_tool(call, session, tx).await;
+                    let tool_message = run_tool(call, session, tx, cancel_token).await;
                     messages.push(tool_message);
                 }
             }
@@ -489,7 +495,8 @@ async fn agent_loop_step(
                             content: None,
                         });
 
-                        let tool_output_message = run_tool(tool_call_i, session, tx).await;
+                        let tool_output_message =
+                            run_tool(tool_call_i, session, tx, cancel_token).await;
                         messages.push(tool_output_message);
                     }
                 }
