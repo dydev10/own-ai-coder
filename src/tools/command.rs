@@ -22,6 +22,8 @@ pub async fn bash(arguments: &str, cancel_token: &CancellationToken) -> ToolResu
         }
     };
 
+    // BUG: sh gets killed on drop, but grandchild process get orphaned and keeps running.
+    // TODO: Gotta fix this with process-group crate or something similar
     let child = match tokio::process::Command::new("sh")
         .arg("-c")
         .arg(&args.command)
