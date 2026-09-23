@@ -25,6 +25,7 @@ pub async fn bash(arguments: &str, cancel_token: &CancellationToken) -> ToolResu
     let child = match tokio::process::Command::new("sh")
         .arg("-c")
         .arg(&args.command)
+        .stdin(Stdio::null())
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .kill_on_drop(true)
