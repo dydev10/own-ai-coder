@@ -1,6 +1,5 @@
 use async_openai::{Client, config::OpenAIConfig};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::{collections::BTreeMap, sync::Arc};
 use tokio::sync::{Mutex, mpsc};
 use tokio_stream::StreamExt;
@@ -120,7 +119,7 @@ struct ChatChunk {
 
 #[derive(Debug, Deserialize)]
 struct Choice {
-    message: ChatMessage,
+    message: ReponseMessage,
     finish_reason: Option<String>,
 }
 
@@ -137,6 +136,15 @@ struct Delta {
     #[serde(default)]
     //reasoning: Option<String>,
     tool_calls: Option<Vec<ToolCallChunk>>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ReponseMessage {
+    content: Option<String>,
+    #[serde(default)]
+    reasoning: Option<String>,
+    #[serde(default)]
+    tool_calls: Option<Vec<WireToolCall>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -301,17 +309,6 @@ impl ChatStreamState {
     }
 }
 
-fn print_tool_reasoning(tool_name: &str, reasoning: &str) {
-    return;
-    eprintln!("/********\\");
-    eprintln!("Reasoning to call tool: {tool_name}");
-    eprintln!("------",);
-    eprintln!("{reasoning}");
-    eprintln!("---");
-    eprintln!("\\********/");
-    eprintln!("\n");
-}
-
 async fn run_tool(
     tool_call: WireToolCall,
     session: SessionId,
@@ -436,76 +433,70 @@ async fn agent_loop_step(
         return Ok(state.finish_kind);
     }
 
-    let response: Value = client.chat().create_byot(request_body).await?;
+    if cancel_token.is_cancelled() {
+        return Ok(None);
+    }
 
-    // Extract the response kind
-    let response_kind: Option<ChatFinishKind> =
-        match response["choices"][0]["finish_reason"].as_str() {
-            Some(reason) => ChatFinishKind::from_reason(reason),
-            None => None,
-        };
+    let response: ChatResponse = client.chat().create_byot(request_body).await?;
 
-    // Check if normal response or tool call
-    match &response_kind {
-        Some(kind) => match kind {
-            ChatFinishKind::Stop => {
-                if let Some(content) = response["choices"][0]["message"]["content"].as_str() {
-                    //println!("{}", content);
-
-                    // Update backend history
-                    let message = ChatMessage {
-                        kind: ChatMessageKind::Assistant,
-                        role: String::from("assistant"),
-                        content: Some(String::from(content)),
-                    };
-                    messages.push(message);
-
-                    // Send event for App UI Update
-                    tx.send(SessionUpdate::AgentMessageChunk {
-                        session,
-                        text: String::from(content),
-                    })
-                    .await?;
-                }
-            }
-            ChatFinishKind::ToolCall => {
-                let tool_call_data = response["choices"][0]["message"]["tool_calls"].as_array();
-                if let Some(tools) = tool_call_data {
-                    for (i, tool) in tools.iter().enumerate() {
-                        let tool_name = tool["function"]["name"]
-                            .as_str()
-                            .expect("tool_name not found in json");
-
-                        // print reasoning for every tool call
-                        if let Some(reasoning) =
-                            response["choices"][0]["message"]["reasoning"].as_str()
-                        {
-                            print_tool_reasoning(tool_name, reasoning);
-                        }
-
-                        let tool_call_i = serde_json::from_value::<WireToolCall>(
-                            response["choices"][0]["message"]["tool_calls"][i].clone(),
-                        )
-                        .expect("tool_call_i not found in json");
-                        messages.push(ChatMessage {
-                            kind: ChatMessageKind::ToolCalls {
-                                tool_calls: vec![tool_call_i.clone()],
-                            },
-                            role: String::from("assistant"),
-                            content: None,
-                        });
-
-                        let tool_output_message =
-                            run_tool(tool_call_i, session, tx, cancel_token).await;
-                        messages.push(tool_output_message);
-                    }
-                }
-            }
-        },
-        None => println!("Unknown response type from LLM"),
+    let Some(choice) = response.choices.into_iter().next() else {
+        return Ok(None);
     };
 
-    Ok(response_kind)
+    let finish_kind = choice
+        .finish_reason
+        .as_deref()
+        .and_then(ChatFinishKind::from_reason);
+
+    // Check if normal response or tool call
+    match finish_kind {
+        Some(ChatFinishKind::Stop) => {
+            if let Some(content) = choice.message.content {
+                // Update backend history
+                let message = ChatMessage {
+                    kind: ChatMessageKind::Assistant,
+                    role: String::from("assistant"),
+                    content: Some(content.clone()),
+                };
+                messages.push(message);
+
+                // Send event for App UI Update
+                tx.send(SessionUpdate::AgentMessageChunk {
+                    session,
+                    text: content,
+                })
+                .await?;
+            }
+            Ok(Some(ChatFinishKind::Stop))
+        }
+
+        Some(ChatFinishKind::ToolCall) => {
+            let calls = choice.message.tool_calls.unwrap_or_default();
+            if calls.is_empty() {
+                return Ok(Some(ChatFinishKind::ToolCall));
+            }
+
+            messages.push(ChatMessage {
+                kind: ChatMessageKind::ToolCalls {
+                    tool_calls: calls.clone(),
+                },
+                role: String::from("assistant"),
+                content: choice.message.content,
+            });
+
+            for call in calls {
+                if cancel_token.is_cancelled() {
+                    break;
+                }
+                let tool_output_message = run_tool(call, session, tx, cancel_token).await;
+                messages.push(tool_output_message);
+            }
+
+            Ok(Some(ChatFinishKind::ToolCall))
+        }
+
+        other => Ok(other),
+    }
 }
 
 async fn run_agent_loop(
